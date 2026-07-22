@@ -1,83 +1,288 @@
-# Particle Language Protocol (PLP)
+Particle Language Program (PLP)
 
-**Axiomatic, Pipeline-Oriented Production Kernel**  
-**v10.2 — Numerically Faithful Edition**
+Overview
 
-粒子系を「言語」として扱うための公理的パイプラインカーネル。  
-物理公理 → 数値積分 → 適応的観測 → 言語パケット（Payload） → Hub によるモジュール配信、という構成で、実験と本番の両方に耐える設計を目指しています。
+Particle Language Program (PLP) は、自然言語を直接解釈するシステムではありません。
 
-## 現在の位置付け（v10.2）
+PLPは入力を**粒子世界（Particle World）**へ投影し、その物理状態のみを観測・カプセル化して外部へ渡すための中立的なランタイムです。
 
-- **数字的忠実性**を優先してパラメータを確定
-- 半径揺らぎ `std_r ≈ 0.017`
-- 全エネルギー揺らぎを大きく抑制（Tot std ≈ 0.16〜0.32）
-- Hub が公理に照らしてペイロード整合性を検証
-- 観測閾値・相転移閾値も公理層（`ObservationAxioms`）に昇格
+PLP自身は、
 
-## 主要構成
+- 単語の意味
+- 感情
+- 文脈
+- 意図
 
-| 層 | 役割 |
-|------|------|
-| `PhysicsAxioms` / `NumericalConfig` / `ObservationAxioms` | 公理層（不変パラメータ） |
-| `ParticleWorldEngine` + `FaithfulVerletIntegrator` | 物理時間発展 |
-| `PLPCockpit` | 適応的観測オーケストレーター |
-| `PLPHub` | 公理的言語バス（メインHub） |
-| Attachment Modules | 下記参照 |
+を一切保持しません。
 
-## Attachment Modules
+意味の解釈は受信したLLM（ChatGPT、Claude、Gemini、Grokなど）が担当します。
 
-### 組み込み（plp_kernel.py 内）
-- `FSMPhaseAnalyzerModule` — 相状態機械
-- `SyncMetricsMonitorModule` — Order Parameter / 位相標準偏差
-- `PLPAnomalyDetectorModule` — エネルギー異常検知
-- `PLPJSONLoggerModule` — ペイロードシリアライズ確認
-
-### 追加モジュール（`modules/`）
-- **[`geometry_radius_monitor.py`](./modules/geometry_radius_monitor.py)**  
-  半径統計（mean / std / min-max / skew / kurtosis）、COMドリフト、拘束エネルギーとの相関
-- **[`energy_partition_monitor.py`](./modules/energy_partition_monitor.py)**  
-  KE / 拘束PE / Morse PE / Higgs PE の内訳と支配割合
-
-## 実行
-
-```bash
-python plp_kernel.py
-```
-
-追加モジュールを使う例:
-
-```python
-from plp_kernel import *
-from modules.geometry_radius_monitor import GeometryRadiusMonitorModule
-from modules.energy_partition_monitor import EnergyPartitionMonitorModule
-
-# ... engine / hub 作成後
-hub.connect(GeometryRadiusMonitorModule(axioms))
-   .connect(EnergyPartitionMonitorModule(axioms))
-```
-
-## 確定パラメータ（v10.2）
-
-```text
-mu_constraint      = 18.0
-morse_de           = 0.085
-r_phase_amp        = 0.09
-r_margin_coef      = 0.13
-gamma_base         = 2.5
-force_clip         = 13.5
-dt                 = 0.0155
-temp_env           = 0.0065
-```
-
-## 設計方針
-
-- 公理は `frozen=True` の dataclass で固定
-- Payload は不変集約オブジェクト
-- Hub はチェーン可能な接続と整合性検証を持つ
-- 数値積分は半径安定とエネルギー制御を優先した FaithfulVerlet
+PLPは**「意味を持たない物理世界」**を提供します。
 
 ---
 
-**Main Hub file**: [`plp_kernel.py`](./plp_kernel.py)
+Design Philosophy
 
-製作者: kishimoto-void  
+従来のLLMでは、
+
+Input
+ ↓
+Tokenizer
+ ↓
+Embedding
+ ↓
+Transformer
+ ↓
+Meaning
+
+という流れになります。
+
+PLPでは、
+
+Input
+ ↓
+Particle World
+ ↓
+Geometry
+Constraint
+Vector
+Phase
+Energy
+Topology
+ ↓
+Observer
+ ↓
+PLP Capsule
+ ↓
+LLM
+ ↓
+Meaning
+
+となります。
+
+つまり、
+
+意味の生成をLLMまで遅延させる
+
+ことがPLP最大の特徴です。
+
+---
+
+Core Principles
+
+PLPは以下の原則を持ちます。
+
+1. Semantic Free
+
+PLPは意味を知りません。
+
+例えば
+
+「猫」
+「嬉しい」
+「戦争」
+
+は全て単なる入力刺激です。
+
+PLPは意味ではなく物理状態のみを扱います。
+
+---
+
+2. Observer First
+
+Observerは
+
+Geometry
+Energy
+Constraint
+Clock
+Topology
+Phase
+Vector
+
+のみを観測します。
+
+意味を生成しません。
+
+---
+
+3. Language Independent
+
+PLPは
+
+- Python
+- Rust
+- C++
+- C
+- Java
+- Go
+
+などの実装言語に依存しません。
+
+Observer Capsule が共通仕様であれば実装は自由です。
+
+---
+
+4. LLM Independent
+
+PLPは
+
+- ChatGPT
+- Claude
+- Gemini
+- Grok
+- Local LLM
+
+など全てへ同じCapsuleを送ることができます。
+
+解釈のみ各LLMが担当します。
+
+---
+
+Runtime Architecture
+
+            Input
+              │
+              ▼
+      Input Encoder
+              │
+              ▼
+     Particle Kernel
+              │
+              ▼
+        World Update
+              │
+              ▼
+         Observer
+              │
+              ▼
+       PLP Capsule
+              │
+      ┌───────┼────────┐
+      ▼       ▼        ▼
+  ChatGPT   Claude   Gemini
+      ▼       ▼        ▼
+        Meaning / Reasoning
+
+---
+
+Observer Capsule
+
+Observerは物理状態のみを送信します。
+
+例
+
+Protocol : PLP/1.0
+
+Clock : 2048
+
+Geometry
+ MeanRadius
+ StdRadius
+
+Constraint
+ Energy
+
+Phase
+
+Vector
+
+Topology
+
+ΔGeometry
+
+ΔEnergy
+
+ΔPhase
+
+ここには
+
+- 感情
+- 意味
+- 推論
+
+は存在しません。
+
+---
+
+Runtime Skeleton
+
+Input
+ ↓
+Particle Kernel
+ ↓
+Observer
+ ↓
+Capsule
+ ↓
+Transport
+ ↓
+LLM
+
+各モジュールは責務を分離します。
+
+- Input：入力取得
+- Kernel：粒子力学
+- Observer：物理観測
+- Capsule：通信フォーマット
+- Transport：送信
+- LLM：意味解釈
+
+---
+
+Why PLP?
+
+通常のAIは入力を直接意味へ変換します。
+
+PLPは一度物理状態へ変換し、
+
+意味を持たない情報
+
+として保存・送信します。
+
+これにより
+
+- AI非依存
+- 言語非依存
+- 実装非依存
+
+な中間表現を提供します。
+
+PLPはAIそのものではなく、
+
+「物理状態を運ぶための共通プロトコル兼ランタイム」
+
+として設計されています。
+
+---
+
+Future Roadmap
+
+今後予定している主なモジュール
+
+- Geometry Observer
+- Energy Observer
+- Constraint Observer
+- Phase Observer
+- Topology Observer
+- Synchronization Observer
+- Residue / Memory Module
+- Dashboard / Visualization
+- Unity Bridge
+- WebSocket Transport
+- Binary Capsule Format
+- Rust Runtime
+- C/C++ Runtime
+- GPU Runtime
+
+---
+
+License
+
+Particle Language Program (PLP)
+
+A language-independent and LLM-independent particle dynamics runtime for transmitting semantic-free physical state capsules.
+
+The meaning is never generated inside PLP.
+
+Meaning begins only when the receiving intelligence interprets the capsule.
