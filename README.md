@@ -22,12 +22,38 @@
 | `ParticleWorldEngine` + `FaithfulVerletIntegrator` | 物理時間発展 |
 | `PLPCockpit` | 適応的観測オーケストレーター |
 | `PLPHub` | 公理的言語バス（メインHub） |
-| Attachment Modules | FSM / Sync / Anomaly / JSON Logger など |
+| Attachment Modules | 下記参照 |
+
+## Attachment Modules
+
+### 組み込み（plp_kernel.py 内）
+- `FSMPhaseAnalyzerModule` — 相状態機械
+- `SyncMetricsMonitorModule` — Order Parameter / 位相標準偏差
+- `PLPAnomalyDetectorModule` — エネルギー異常検知
+- `PLPJSONLoggerModule` — ペイロードシリアライズ確認
+
+### 追加モジュール（`modules/`）
+- **[`geometry_radius_monitor.py`](./modules/geometry_radius_monitor.py)**  
+  半径統計（mean / std / min-max / skew / kurtosis）、COMドリフト、拘束エネルギーとの相関
+- **[`energy_partition_monitor.py`](./modules/energy_partition_monitor.py)**  
+  KE / 拘束PE / Morse PE / Higgs PE の内訳と支配割合
 
 ## 実行
 
 ```bash
 python plp_kernel.py
+```
+
+追加モジュールを使う例:
+
+```python
+from plp_kernel import *
+from modules.geometry_radius_monitor import GeometryRadiusMonitorModule
+from modules.energy_partition_monitor import EnergyPartitionMonitorModule
+
+# ... engine / hub 作成後
+hub.connect(GeometryRadiusMonitorModule(axioms))
+   .connect(EnergyPartitionMonitorModule(axioms))
 ```
 
 ## 確定パラメータ（v10.2）
