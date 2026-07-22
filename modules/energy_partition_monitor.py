@@ -3,10 +3,18 @@ Energy Partition Monitor Module for PLP Kernel
 ================================================
 ポテンシャルエネルギーを拘束 / Morse / Higgs に分割して監視するモジュール。
 どの力がエネルギーを支配しているかを数字で可視化する。
+
+改良点:
+- EnergyBreakdown 構造体で Telemetry / Dashboard 共有を容易に
+- deque による O(1) 履歴管理
+- エネルギー計算関数の注入対応（二重管理防止）
+- get_recent_statistics() で WebUI / RL 向け統計を提供
 """
 
 from __future__ import annotations
-from typing import Optional, List
+from collections import deque
+from dataclasses import dataclass, asdict
+from typing import Optional, Tuple, Dict, Any, Callable
 import logging
 import numpy as np
 from plp_kernel import (
@@ -19,13 +27,29 @@ from plp_kernel import (
 logger = logging.getLogger("PLP.EnergyPartition")
 
 
+@dataclass(frozen=True)
+class EnergyBreakdown:
+    """エネルギー内訳のスナップショット構造体（Telemetry / Dashboard 共有用）"""
+
+    ke: float
+    e_constraint: float
+    e_morse: float
+    e_higgs: float
+    total: float
+    frac_constraint: float
+    frac_morse: float
+    frac_higgs: float
+
+    def to_dict(self) -> Dict[str, float]:
+        return asdict(self)
+
+
 class EnergyPartitionMonitorModule(IAttachmentModule):
     """
-    エネルギー内訳モニター。
+    PLP Kernel 観測（Observer）モジュール：エネルギー内訳モニター。
 
-    出力例:
-      [EnergyPart] KE=0.51  Constr=0.42  Morse=-3.70  Higgs=0.13  Total=-2.64
-                   |ΔE|=0.08  fraction_constr=0.10  fraction_morse=0.87
+    ・Payloadを受け取り、物理状態の分解解析と統計データの非同期提供を行う
+    ・Telemetry / WebUI / RL / Dashboard 連携用パケットの生成
     """
 
     def __init__(
@@ -33,6 +57,9 @@ class EnergyPartitionMonitorModule(IAttachmentModule):
         axioms: Optional[PhysicsAxioms] = None,
         history_len: int = 32,
         log_every: int = 1,
+        energy_calc_fn: Optional[
+            Callable[[np.ndarray, PhysicsAxioms], Tuple[float, float, float, float]]
+        ] = None,
     ):
         self.axi = axioms or PhysicsAxioms()
         self.neighbor = DirectPairwiseSearch()
@@ -40,19 +67,35 @@ class EnergyPartitionMonitorModule(IAttachmentModule):
         self.log_every = log_every
         self._count = 0
 
-        self.ke_hist: List[float] = []
-        self.constr_hist: List[float] = []
-        self.morse_hist: List[float] = []
-        self.higgs_hist: List[float] = []
+        # 物理計算エンジンの注入（二重管理を防止する場合に使用）
+        self._energy_calc_fn = energy_calc_fn
 
-    def _compute_partitions(self, nu: np.ndarray) -> tuple[float, float, float, float]:
-        """raw_nu からエネルギー内訳を再計算（モジュール独立性のため）"""
+        # 履歴保持用 deque (O(1))
+        self.ke_hist: deque[float] = deque(maxlen=history_len)
+        self.constr_hist: deque[float] = deque(maxlen=history_len)
+        self.morse_hist: deque[float] = deque(maxlen=history_len)
+        self.higgs_hist: deque[float] = deque(maxlen=history_len)
+        self.morse_dominance_hist: deque[float] = deque(maxlen=history_len)
+
+        self._last_breakdown: Optional[EnergyBreakdown] = None
+
+    def _default_compute_partitions(
+        self, nu: np.ndarray
+    ) -> Tuple[float, float, float, float]:
+        """モジュール内ローカル計算（フォールバック用）
+
+        Note: KE はカーネル本体 (PayloadBuilder) と一致させるため
+              0.5 * sum(V**2) を使用（M は Higgs 場であり質量ではない）
+        """
+        if nu.shape[0] == 0:
+            return 0.0, 0.0, 0.0, 0.0
+
         X = nu[:, 0:3]
         V = nu[:, 3:6]
         M = nu[:, 6]
         C = nu[:, 7:9]
 
-        # Kinetic
+        # Kinetic（カーネル本体と定義を揃える）
         ke = 0.5 * float(np.sum(V ** 2))
 
         # Constraint
@@ -68,7 +111,7 @@ class EnergyPartitionMonitorModule(IAttachmentModule):
 
         # Higgs
         e_higgs = self.axi.higgs_lambda * float(
-            np.sum(0.25 * M**4 - 0.5 * (self.axi.higgs_vev ** 2) * M**2)
+            np.sum(0.25 * (M ** 4) - 0.5 * (self.axi.higgs_vev ** 2) * (M ** 2))
         )
 
         # Morse
@@ -80,50 +123,85 @@ class EnergyPartitionMonitorModule(IAttachmentModule):
 
         return ke, e_constraint, e_morse, e_higgs
 
+    def compute_breakdown(self, nu: np.ndarray) -> EnergyBreakdown:
+        """エネルギー内訳パケットの生成"""
+        if self._energy_calc_fn is not None:
+            ke, e_c, e_m, e_h = self._energy_calc_fn(nu, self.axi)
+        else:
+            ke, e_c, e_m, e_h = self._default_compute_partitions(nu)
+
+        total = ke + e_c + e_m + e_h
+        abs_sum = abs(e_c) + abs(e_m) + abs(e_h) + 1e-12
+
+        return EnergyBreakdown(
+            ke=ke,
+            e_constraint=e_c,
+            e_morse=e_m,
+            e_higgs=e_h,
+            total=total,
+            frac_constraint=abs(e_c) / abs_sum,
+            frac_morse=abs(e_m) / abs_sum,
+            frac_higgs=abs(e_h) / abs_sum,
+        )
+
     def on_plp_payload(self, payload: ParticleLanguagePayload) -> None:
         self._count += 1
         if self._count % self.log_every != 0:
             return
 
         nu = payload.snapshot.raw_nu
-        ke, e_c, e_m, e_h = self._compute_partitions(nu)
-        total = ke + e_c + e_m + e_h
+        bd = self.compute_breakdown(nu)
+        self._last_breakdown = bd
         delta_e = payload.energy.delta_energy
 
-        # 割合（絶対値ベースで支配力を見る）
-        abs_sum = abs(e_c) + abs(e_m) + abs(e_h) + 1e-12
-        frac_c = abs(e_c) / abs_sum
-        frac_m = abs(e_m) / abs_sum
-        frac_h = abs(e_h) / abs_sum
-
-        # 履歴
-        self.ke_hist.append(ke)
-        self.constr_hist.append(e_c)
-        self.morse_hist.append(e_m)
-        self.higgs_hist.append(e_h)
-        if len(self.ke_hist) > self.history_len:
-            self.ke_hist.pop(0)
-            self.constr_hist.pop(0)
-            self.morse_hist.pop(0)
-            self.higgs_hist.pop(0)
+        # 履歴更新
+        self.ke_hist.append(bd.ke)
+        self.constr_hist.append(bd.e_constraint)
+        self.morse_hist.append(bd.e_morse)
+        self.higgs_hist.append(bd.e_higgs)
+        self.morse_dominance_hist.append(bd.frac_morse)
 
         logger.info(
-            f"  [EnergyPart] KE={ke:6.3f}  Constr={e_c:6.3f}  "
-            f"Morse={e_m:7.3f}  Higgs={e_h:6.3f}  Total={total:7.3f}"
+            f"  [EnergyPart] KE={bd.ke:6.3f}  Constr={bd.e_constraint:6.3f}  "
+            f"Morse={bd.e_morse:7.3f}  Higgs={bd.e_higgs:6.3f}  Total={bd.total:7.3f}"
         )
         logger.info(
             f"               |ΔE|={abs(delta_e):.3f}  "
-            f"frac(C/M/H)={frac_c:.2f}/{frac_m:.2f}/{frac_h:.2f}"
+            f"frac(C/M/H)={bd.frac_constraint:.2f}/{bd.frac_morse:.2f}/{bd.frac_higgs:.2f}"
         )
 
     @property
     def recent_morse_dominance(self) -> float:
         """最近の Morse 寄与割合の平均"""
-        if not self.morse_hist:
+        if not self.morse_dominance_hist:
             return 0.0
-        abs_sums = [
-            abs(c) + abs(m) + abs(h) + 1e-12
-            for c, m, h in zip(self.constr_hist, self.morse_hist, self.higgs_hist)
+        return float(np.mean(self.morse_dominance_hist))
+
+    @property
+    def last_breakdown(self) -> Optional[EnergyBreakdown]:
+        """直近に計算されたエネルギー内訳パケット"""
+        return self._last_breakdown
+
+    def get_recent_statistics(self) -> Dict[str, float]:
+        """
+        WebUI / Unity / Dashboard / RL 向けに、直近ウィンドウの各種統計量を抽出
+        """
+        if not self.ke_hist:
+            return {}
+
+        totals = [
+            k + c + m + h
+            for k, c, m, h in zip(
+                self.ke_hist, self.constr_hist, self.morse_hist, self.higgs_hist
+            )
         ]
-        fracs = [abs(m) / s for m, s in zip(self.morse_hist, abs_sums)]
-        return float(np.mean(fracs))
+
+        return {
+            "mean_ke": float(np.mean(self.ke_hist)),
+            "mean_constraint": float(np.mean(self.constr_hist)),
+            "mean_morse": float(np.mean(self.morse_hist)),
+            "mean_higgs": float(np.mean(self.higgs_hist)),
+            "mean_total": float(np.mean(totals)),
+            "std_total": float(np.std(totals)),
+            "mean_morse_dominance": float(np.mean(self.morse_dominance_hist)),
+        }
