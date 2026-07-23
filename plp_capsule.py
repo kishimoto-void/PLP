@@ -1,15 +1,15 @@
 """
-PLP Capsule v1.2
+PLP Capsule v1.3
 ================
 通信規格として固めた版。
 
-主な改善:
-- Schema に plp. 名前空間を推奨
-- Capability を公式 Enum + 拡張可能に
-- CapabilityRegistry を追加
-- content_hash の対象を仕様として明確化
-- Observer に priority を付けられるように
-- from_dict / 空ケースの堅牢性向上
+v1.3 改善点:
+- from_dict の堅牢性向上（欠落フィールドに対する安全なデフォルト）
+- content_hash を 32 文字に延長（衝突耐性向上）
+- Builder のエラーを構造化（Observer 名 + メッセージ）
+- CapsuleIntegrity に hash_valid / observer_valid を意識した設計
+- ObservationBlock の schema 補完ロジックを明確化
+- verify_content_hash ヘルパーを追加
 
 設計目標 (CAPSULE.md 準拠):
 1. Interpretation Stability
@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
 from enum import Enum
-from typing import Any, Dict, List, Optional, Protocol, Sequence
+from typing import Any, Dict, List, Optional, Protocol, Sequence, Tuple
 from uuid import uuid4
 import hashlib
 import json
@@ -100,7 +100,7 @@ class CapsuleFlags:
 class CapsuleHeader:
     protocol: str = "PLP/1.0"
     capsule_schema: str = "capsule.v1"
-    version: str = "1.2"
+    version: str = "1.3"
 
     capsule_id: str = field(default_factory=lambda: str(uuid4()))
     parent_id: Optional[str] = None
@@ -166,7 +166,9 @@ class DeltaBlock:
 @dataclass(frozen=True)
 class CapsuleIntegrity:
     content_hash: Optional[str] = None
-    valid: bool = True
+    valid: bool = True                    # 全体として有効か（後方互換）
+    observer_valid: bool = True           # Observer 実行が成功したか
+    hash_valid: Optional[bool] = None     # ハッシュ検証結果（受信側で設定）
     error: Optional[str] = None
 
 
@@ -223,13 +225,64 @@ class ICapsuleTransport(Protocol):
 
 
 # ==========================================================
+# Hash helper
+# ==========================================================
+
+def compute_content_hash(
+    capsule_id: str,
+    clock: int,
+    sequence: int,
+    observations: Sequence[ObservationBlock],
+    delta: DeltaBlock,
+) -> str:
+    """
+    仕様:
+    - capsule_id / clock / sequence を含める（時間一貫性の検証用）
+    - observations と delta を含める
+    - flags や timestamp は含めない（再計算で変わりうるため）
+    - 32 文字（SHA256 先頭）で衝突耐性を確保
+    """
+    payload = {
+        "capsule_id": capsule_id,
+        "clock": clock,
+        "sequence": sequence,
+        "observations": [
+            {
+                "name": o.name,
+                "schema": o.schema,
+                "capability": o.capability,
+                "values": o.values,
+            }
+            for o in observations
+        ],
+        "delta": delta.changes,
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()[:32]
+
+
+def verify_content_hash(capsule: PLPCapsule) -> bool:
+    """受信側で integrity を検証するためのヘルパー"""
+    if capsule.integrity.content_hash is None:
+        return False
+    expected = compute_content_hash(
+        capsule.header.capsule_id,
+        capsule.header.clock,
+        capsule.header.sequence,
+        capsule.observations,
+        capsule.delta,
+    )
+    return expected == capsule.integrity.content_hash
+
+
+# ==========================================================
 # Builder
 # ==========================================================
 
 class CapsuleBuilder:
     def __init__(self) -> None:
         # (priority, observer) のリスト。小さい priority が先。
-        self._observers: List[tuple[int, IObserver]] = []
+        self._observers: List[Tuple[int, IObserver]] = []
 
     def register(self, observer: IObserver, priority: int = 100) -> "CapsuleBuilder":
         self._observers.append((priority, observer))
@@ -248,6 +301,8 @@ class CapsuleBuilder:
         if previous is None:
             return DeltaBlock()
 
+        # キーは name + schema。schema 進化時は Delta が途切れる可能性があるが、
+        # 意図的に厳密な同一性を要求する設計。
         prev_map = {f"{o.name}.{o.schema}": o for o in previous.observations}
         changes: Dict[str, Dict[str, float]] = {}
 
@@ -268,36 +323,6 @@ class CapsuleBuilder:
 
         return DeltaBlock(changes=changes)
 
-    def _compute_content_hash(
-        self,
-        header: CapsuleHeader,
-        observations: Sequence[ObservationBlock],
-        delta: DeltaBlock,
-    ) -> str:
-        """
-        仕様:
-        - capsule_id / clock / sequence を含める（時間一貫性の検証用）
-        - observations と delta を含める
-        - flags や timestamp は含めない（再計算で変わりうるため）
-        """
-        payload = {
-            "capsule_id": header.capsule_id,
-            "clock": header.clock,
-            "sequence": header.sequence,
-            "observations": [
-                {
-                    "name": o.name,
-                    "schema": o.schema,
-                    "capability": o.capability,
-                    "values": o.values,
-                }
-                for o in observations
-            ],
-            "delta": delta.changes,
-        }
-        raw = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
-        return hashlib.sha256(raw).hexdigest()[:16]
-
     def build(
         self,
         world: Any,
@@ -313,14 +338,15 @@ class CapsuleBuilder:
         errors: List[str] = []
 
         for _, observer in self._observers:
+            obs_name = type(observer).__name__
             try:
                 block = observer.observe(world)
                 if not isinstance(block, ObservationBlock):
-                    errors.append(f"non-ObservationBlock from {type(observer).__name__}")
+                    errors.append(f"{obs_name}: returned non-ObservationBlock")
                     continue
                 observations.append(block)
             except Exception as e:
-                errors.append(f"{type(observer).__name__}: {e}")
+                errors.append(f"{obs_name}: {type(e).__name__}: {e}")
 
         header = CapsuleHeader(
             clock=clock,
@@ -332,11 +358,20 @@ class CapsuleBuilder:
         )
 
         delta = self._compute_delta(observations, previous)
-        content_hash = self._compute_content_hash(header, observations, delta)
+        content_hash = compute_content_hash(
+            header.capsule_id,
+            header.clock,
+            header.sequence,
+            observations,
+            delta,
+        )
 
+        observer_valid = len(errors) == 0
         integrity = CapsuleIntegrity(
             content_hash=content_hash,
-            valid=len(errors) == 0,
+            valid=observer_valid,
+            observer_valid=observer_valid,
+            hash_valid=None,  # 受信側で設定
             error="; ".join(errors) if errors else None,
         )
 
@@ -364,40 +399,85 @@ class CapsuleSerializer:
 
     @staticmethod
     def from_dict(data: Dict[str, Any]) -> PLPCapsule:
-        header_data = dict(data.get("header", {}))
-        flags_data = header_data.pop("flags", {})
+        """欠落フィールドに対して安全にデフォルトを適用する堅牢な復元"""
+        # --- Header ---
+        header_data = dict(data.get("header") or {})
+        flags_data = header_data.pop("flags", {}) or {}
+
+        # 許可されたフィールドだけを取り出す
+        header_fields = CapsuleHeader.__dataclass_fields__
+        safe_header = {
+            k: v for k, v in header_data.items()
+            if k in header_fields and k != "flags"
+        }
+
+        flags_fields = CapsuleFlags.__dataclass_fields__
+        safe_flags = {
+            k: v for k, v in flags_data.items()
+            if k in flags_fields
+        }
+
         header = CapsuleHeader(
-            **{k: v for k, v in header_data.items() if k in CapsuleHeader.__dataclass_fields__},
-            flags=CapsuleFlags(**{k: v for k, v in flags_data.items() if k in CapsuleFlags.__dataclass_fields__}),
+            **safe_header,
+            flags=CapsuleFlags(**safe_flags),
         )
 
-        ref_data = data.get("input", {}).get("reference")
-        reference = InputReference(**ref_data) if isinstance(ref_data, dict) else None
+        # --- Input ---
+        input_data = data.get("input") or {}
+        ref_data = input_data.get("reference")
+        reference = None
+        if isinstance(ref_data, dict) and "input_id" in ref_data:
+            reference = InputReference(
+                input_id=str(ref_data["input_id"]),
+                input_type=str(ref_data.get("input_type", "opaque")),
+                metadata=dict(ref_data.get("metadata") or {}),
+            )
 
         inp = InputCapsule(
-            raw_input=data.get("input", {}).get("raw_input"),
-            input_type=data.get("input", {}).get("input_type", "opaque"),
-            metadata=data.get("input", {}).get("metadata", {}),
+            raw_input=input_data.get("raw_input"),
+            input_type=str(input_data.get("input_type", "opaque")),
+            metadata=dict(input_data.get("metadata") or {}),
             reference=reference,
         )
 
-        observations = []
-        for o in data.get("observations", []):
+        # --- Observations ---
+        observations: List[ObservationBlock] = []
+        for o in data.get("observations") or []:
+            if not isinstance(o, dict):
+                continue
             observations.append(
                 ObservationBlock(
-                    name=o.get("name", ""),
-                    schema=o.get("schema", ""),
-                    capability=o.get("capability", Capability.CUSTOM.value),
-                    values=o.get("values", {}),
+                    name=str(o.get("name", "")),
+                    schema=str(o.get("schema", "")),
+                    capability=str(o.get("capability", Capability.CUSTOM.value)),
+                    values={str(k): float(v) for k, v in (o.get("values") or {}).items()
+                            if isinstance(v, (int, float))},
                     clock=o.get("clock"),
                 )
             )
 
-        delta = DeltaBlock(changes=data.get("delta", {}).get("changes", {}))
-        integrity_data = data.get("integrity", {})
+        # --- Delta ---
+        delta_data = data.get("delta") or {}
+        changes = delta_data.get("changes") or {}
+        # 値を float に正規化
+        safe_changes: Dict[str, Dict[str, float]] = {}
+        if isinstance(changes, dict):
+            for key, diff in changes.items():
+                if isinstance(diff, dict):
+                    safe_changes[str(key)] = {
+                        str(k): float(v)
+                        for k, v in diff.items()
+                        if isinstance(v, (int, float))
+                    }
+        delta = DeltaBlock(changes=safe_changes)
+
+        # --- Integrity ---
+        integrity_data = data.get("integrity") or {}
         integrity = CapsuleIntegrity(
             content_hash=integrity_data.get("content_hash"),
-            valid=integrity_data.get("valid", True),
+            valid=bool(integrity_data.get("valid", True)),
+            observer_valid=bool(integrity_data.get("observer_valid", integrity_data.get("valid", True))),
+            hash_valid=integrity_data.get("hash_valid"),
             error=integrity_data.get("error"),
         )
 
