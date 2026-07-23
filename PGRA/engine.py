@@ -6,17 +6,22 @@ PLP Geometric Relaxation Architecture (PGRA) v1.0 Core Engine
 Axiom P1:
   物理状態は時間発展した後、シミュレーション時間を進めることなく
   幾何学的基準状態への差異を緩和する。
+
+v1.1:
+- RelaxationStrategy のスケールパラメータを外部から設定可能に
 """
 
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 import numpy as np
 
 from .state import PhysicalState, Particle, Geometry, GeometryKind
 from .reference import Reference
 from .convergence import ConvergenceEngine, ConvergenceMetric
 from .integrator import TimeIntegrator, EulerIntegrator
+from .strategy import RelaxationStrategy
+from .policy import CorrectionPolicy
 
 
 class PGRAPhysicsEngine:
@@ -28,12 +33,25 @@ class PGRAPhysicsEngine:
         self,
         integrator: TimeIntegrator | None = None,
         convergence_engine: ConvergenceEngine | None = None,
+        position_scale: float = 1.0,
+        multi_particle_damping: float = 0.15,
+        policy: CorrectionPolicy | None = None,
     ):
         self.state = PhysicalState()
         self.references: Dict[str, Reference] = {}
         self.integrator = integrator or EulerIntegrator()
-        self.convergence_engine = convergence_engine or ConvergenceEngine()
+
+        # 戦略をここで組み立て、スケールを明示的に制御可能にする
+        strategy = RelaxationStrategy(
+            policy=policy,
+            position_scale=position_scale,
+            multi_particle_damping=multi_particle_damping,
+        )
+        self.convergence_engine = convergence_engine or ConvergenceEngine(strategy=strategy)
+
         self.current_time: float = 0.0
+        self.position_scale = position_scale
+        self.multi_particle_damping = multi_particle_damping
 
     def add_particle(
         self, particle_id: str, position: List[float], mass: float = 1.0

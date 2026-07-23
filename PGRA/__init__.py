@@ -1,5 +1,5 @@
 """
-PLP Geometric Relaxation Architecture (PGRA) v1.0
+PLP Geometric Relaxation Architecture (PGRA) v1.1
 ================================================
 
 PLP の物理層：時間発展後にシミュレーション時間を進めず、
@@ -9,11 +9,10 @@ Axiom P1:
   物理状態は時間発展した後、シミュレーション時間を進めることなく
   幾何学的基準状態への差異を緩和する。
 
-主要公開:
-  - PGRAPhysicsEngine
-  - PhysicalState / Particle / Geometry
-  - Reference 系 (DistanceReference, StabilityReference)
-  - ConvergenceEngine / ConvergenceMetric
+v1.1 変更点:
+  - RelaxationStrategy に position_scale / multi_particle_damping を追加
+  - DistanceReference の near-zero 距離保護を強化
+  - Engine からスケールを設定可能に
 """
 
 from .state import Particle, Geometry, GeometryKind, PhysicalState
@@ -43,4 +42,4 @@ __all__ = [
     "PGRAPhysicsEngine",
 ]
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"

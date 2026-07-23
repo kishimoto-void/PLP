@@ -3,6 +3,9 @@ PGRA Pure Reference & Metric
 ============================
 Reference は「現在の State を評価して Metric を返すだけ」の純粋関数的インターフェース。
 状態変更ロジックを一切排除。
+
+v1.1:
+- DistanceReference に near-zero 距離の数値保護を追加
 """
 
 from __future__ import annotations
@@ -44,6 +47,7 @@ class DistanceReference:
         distance: float,
         priority: int = 50,
         weight: float = 1.0,
+        eps: float = 1e-12,
     ):
         self.id = ref_id
         self.p1_id = p1_id
@@ -51,6 +55,7 @@ class DistanceReference:
         self.target_distance = distance
         self.priority = priority
         self.weight = weight
+        self.eps = float(eps)
 
     def evaluate_metric(self, state: PhysicalState) -> GeometricMetric:
         p1 = state.particles[self.p1_id].position
@@ -58,7 +63,8 @@ class DistanceReference:
         delta_vec = p1 - p2
         dist = float(np.linalg.norm(delta_vec))
 
-        if dist == 0.0:
+        # 数値的に安全な near-zero 処理
+        if dist < self.eps:
             return GeometricMetric(
                 self.id, 0.0, np.zeros(3, dtype=np.float64), [self.p1_id, self.p2_id]
             )
