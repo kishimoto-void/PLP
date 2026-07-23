@@ -230,6 +230,13 @@ PGRA/
 - 優先度付き Reference ソート（Stability > Distance など）
 - Core（`plp.core.*`）とは現時点で独立。将来 Adapter で接続予定
 
+### v1.1 改善点（2026-07-24）
+
+- `RelaxationStrategy` に `position_scale` と `multi_particle_damping` を追加し、ハードコードされた 0.1 を排除
+- `DistanceReference` に near-zero 距離保護（eps）を追加し、数値的に安全に
+- `PGRAPhysicsEngine` からスケールパラメータを外部設定可能に
+- 実験時にステップサイズを調整しやすくなった
+
 ### 最小使用例
 
 ```python
@@ -240,7 +247,14 @@ from PGRA import (
     GeometryKind,
 )
 
+# デフォルトスケールで起動
 engine = PGRAPhysicsEngine()
+
+# またはスケールを明示的に指定（実験用）
+engine = PGRAPhysicsEngine(
+    position_scale=1.0,
+    multi_particle_damping=0.12,  # 複数粒子補正の減衰を微調整
+)
 
 engine.add_particle("p1", [0.0, 0.0, 0.0], mass=1.0)
 engine.add_particle("p2", [1.5, 0.0, 0.0], mass=1.0)
