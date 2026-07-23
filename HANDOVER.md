@@ -1,8 +1,8 @@
 # PLP 引き継ぎメモ
 
-**日時**: 2026-07-23  
+**日時**: 2026-07-24  
 **リポジトリ**: https://github.com/kishimoto-void/PLP  
-**状態**: Core 四本柱まで到達。商用利用禁止ライセンス付き。
+**状態**: Core 四本柱 + **PGRA v1.0 (Physics / Geometric Relaxation)** 到達。商用利用禁止ライセンス付き。
 
 ---
 
@@ -29,16 +29,27 @@ PLP/
 ├── HANDOVER.md                        # 本ドキュメント
 ├── LICENSE                            # 非商用・非軍事
 ├── EXPERIMENT_NORMAL_VS_CAPSULE.md    # 通常処理 vs Capsule 比較
+├── EXPERIMENT_CAPSULE_COMPARISON.md
 ├── plp_kernel.py                      # Kernel v10.2（数値忠実版）
 ├── plp_capsule.py                     # Capsule v1.2
 ├── modules/
 │   ├── geometry_radius_monitor.py
 │   └── energy_partition_monitor.py
-└── core/                              # Core 規格実装
-    ├── particle0.py                   # 存在  v1.2
-    ├── geometry.py                    # 空間  v1.1
-    ├── constraint.py                  # 制約  v1.1
-    └── clock.py                       # 時間  v1.0
+├── core/                              # Core 規格実装
+│   ├── particle0.py                   # 存在  v1.2
+│   ├── geometry.py                    # 空間  v1.1
+│   ├── constraint.py                  # 制約  v1.1
+│   └── clock.py                       # 時間  v1.0
+└── PGRA/                              # ★ NEW: Geometric Relaxation Architecture v1.0
+    ├── __init__.py
+    ├── state.py
+    ├── reference.py
+    ├── policy.py
+    ├── strategy.py
+    ├── convergence.py
+    ├── integrator.py
+    ├── engine.py
+    └── README.md
 ```
 
 ---
@@ -65,7 +76,28 @@ PLP/
 
 ---
 
-## 4. Capsule / Kernel（既存）
+## 4. PGRA v1.0（NEW・Physics Module）
+
+**PLP Geometric Relaxation Architecture**
+
+- Reference を純粋な評価関数に分離（副作用ゼロ）
+- ConvergenceMetric で **Difference + Difference Velocity** を観測
+- 閉ループ幾何緩和（Axiom P1）
+- 優先度付き Reference ソート
+- 現時点は独立実装。将来 Core Adapter で接続予定
+
+主要クラス:
+- `PGRAPhysicsEngine`
+- `DistanceReference` / `StabilityReference`
+- `ConvergenceEngine`
+- `MassWeightedPolicy` + `RelaxationStrategy`
+- `EulerIntegrator`
+
+詳細は `PGRA/README.md` を参照。
+
+---
+
+## 5. Capsule / Kernel（既存）
 
 **Capsule v1.2** (`plp_capsule.py`)
 - Header / ObservationBlock / Delta / Integrity
@@ -85,7 +117,7 @@ PLP/
 
 ---
 
-## 5. 仕様・実験・ライセンス
+## 6. 仕様・実験・ライセンス
 
 - **SPEC.md**: MUST/SHALL ベースのプロトコル仕様草案
 - **CAPSULE.md**: Capsule 設計目標（Interpretation Stability 等）
@@ -94,37 +126,41 @@ PLP/
 
 ---
 
-## 6. 次にやるべきこと（優先順）
+## 7. 次にやるべきこと（優先順）
 
-1. **Physics Engine（Core の上）**  
-   Integrator / ConstraintSolver / Dynamics  
-   → Core の Particle / Geometry / Constraint / Clock だけを見る
+1. **PGRA ↔ Core Adapter**  
+   PGRA の PhysicalState / Particle を Core の Particle0 / Geometry / Constraint / Clock に接続
 
-2. **Core と旧 Kernel の接続**  
+2. **ConstraintSolver の導入**  
+   現在の Reference ベース緩和を、Core Constraint 定義に基づく Solver へ拡張
+
+3. **Core と旧 Kernel の接続**  
    現行 `plp_kernel.py` を Core 型に寄せるか、Adapter を置く
 
-3. **Capsule ↔ Core の Observation 接続**  
-   GeometryObserver / EnergyObserver を Core 由来に再実装
+4. **Capsule ↔ Core / PGRA の Observation 接続**  
+   GeometryObserver / EnergyObserver を Core / PGRA 由来に再実装
 
-4. **SPEC の追記**  
-   Core 四モジュールの schema を SPEC.md に正式記載
+5. **SPEC の追記**  
+   Core 四モジュール + PGRA schema を SPEC.md に正式記載
 
-5. **`core/__init__.py`**  
+6. **`core/__init__.py`**  
    公開 API をまとめる
 
 ---
 
-## 7. 設計判断のメモ
+## 8. 設計判断のメモ
 
 - Core を肥大化させない（Relation / Emotion は modules 側）
 - metadata 名前空間: `plp.*` / `vendor.*` / `experimental.*`
 - ConstraintState: ACTIVE / DISABLED / BROKEN
 - Clock は非破壊 `step()`、paused 時は進まない
 - すべて「記述」と「不変条件」に寄せ、計算は上位へ
+- PGRA は「時間発展 → 静的幾何緩和」の責務分離を徹底
 
 ---
 
-## 8. 一言で現状
+## 9. 一言で現状
 
 > **PLP Core v1 の四本柱（存在・空間・制約・時間）は揃った。**  
-> 次は Physics Engine と、旧 Kernel / Capsule との接合。
+> **PGRA v1.0（閉ループ幾何緩和）も追加済み。**  
+> 次は Core Adapter と ConstraintSolver、旧 Kernel / Capsule との接合。
