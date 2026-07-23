@@ -2,20 +2,52 @@
 
 **日時**: 2026-07-24  
 **リポジトリ**: https://github.com/kishimoto-void/PLP  
-**状態**: Core 四本柱 + **PGRA v1.0 (Physics / Geometric Relaxation)** 到達。商用利用禁止ライセンス付き。
+**状態**: Capsule 中心アーキテクチャ + Codec 分離 へ移行開始
 
 ---
 
-## 1. 何を作っているか
+## 1. 設計方針の更新（重要）
 
-**Particle Language Protocol (PLP)**  
-意味を持たない物理状態を運び、解釈は受信側（LLM 等）まで遅延させる通信規格＋ランタイム。
+PLP は「物理エンジン」や「AIフレームワーク」ではなく、
 
-中核原則:
-- Semantic Delay（意味の遅延）
-- Observer Isolation（観測のみ）
-- Language / LLM 非依存
-- Core はデータ構造と不変条件に限定（計算・意味付けは上位層）
+> **Capsule を媒介にしたモジュール実行基盤（Protocol Runtime）**
+
+として位置付ける。
+
+### 基本単位
+
+```
+Capsule
+   │
+   ▼
+Codec.decode()
+   │
+   ▼
+Internal State
+   │
+   ▼
+Module Logic（純粋）
+   │
+   ▼
+Internal State
+   │
+   ▼
+Codec.encode()
+   │
+   ▼
+Capsule
+```
+
+- **Codec** = Capsule ⇔ 内部状態の相互変換のみ（ロジックを持たない）
+- **Logic** = 内部状態に対する処理（Capsule を一切知らない）
+- すべてのモジュールは `process(capsule) -> capsule` だけを実装する
+
+### 利点
+
+- Codec だけ単体で Round-trip テスト可能
+- Logic は純粋なアルゴリズムとして保てる
+- Capsule のバージョン変更は Codec のみに影響
+- Unity / ROS / MuJoCo / Live2D などは Capsule だけ読めば接続可能
 
 ---
 
@@ -23,144 +55,70 @@
 
 ```
 PLP/
-├── README.md                          # 設計思想
-├── CAPSULE.md                         # Capsule 設計目標
-├── SPEC.md                            # PLP Specification v1.0（RFC 寄り）
-├── HANDOVER.md                        # 本ドキュメント
-├── LICENSE                            # 非商用・非軍事
-├── EXPERIMENT_NORMAL_VS_CAPSULE.md    # 通常処理 vs Capsule 比較
-├── EXPERIMENT_CAPSULE_COMPARISON.md
-├── plp_kernel.py                      # Kernel v10.2（数値忠実版）
-├── plp_capsule.py                     # Capsule v1.2
-├── modules/
-│   ├── geometry_radius_monitor.py
-│   └── energy_partition_monitor.py
-├── core/                              # Core 規格実装
-│   ├── particle0.py                   # 存在  v1.2
-│   ├── geometry.py                    # 空間  v1.1
-│   ├── constraint.py                  # 制約  v1.1
-│   └── clock.py                       # 時間  v1.0
-└── PGRA/                              # ★ NEW: Geometric Relaxation Architecture v1.0
-    ├── __init__.py
-    ├── state.py
-    ├── reference.py
-    ├── policy.py
-    ├── strategy.py
-    ├── convergence.py
-    ├── integrator.py
-    ├── engine.py
-    └── README.md
+├── plp_capsule.py              # Capsule v1.3（通信規格）
+├── plp_kernel.py               # 旧 Kernel（数値忠実版）
+├── core/                       # 世界の定義（Particle0 / Geometry / Constraint / Clock）
+├── PGRA/                       # 幾何緩和エンジン
+├── codecs/                     # ★ NEW: Capsule ⇔ 内部状態
+│   ├── __init__.py
+│   ├── base.py                 # CapsuleCodec / CapsuleModule Protocol
+│   └── pgra_codec.py           # PGRACodec + PGRAModule
+├── modules/                    # 既存監視モジュール
+├── SPEC.md
+├── CAPSULE.md
+├── HANDOVER.md
+└── ...
 ```
 
 ---
 
-## 3. Core（完了）
+## 3. 現在の実装状況
 
-| モジュール | 役割 | schema |
-|-----------|------|--------|
-| Particle0 | 存在 | `plp.core.particle0/1.2` |
-| Geometry | 空間 | `plp.core.geometry/1.1` |
-| Constraint | 制約 | `plp.core.constraint/1.1` |
-| Clock | 時間 | `plp.core.clock/1.0` |
-
-共通 IF（全 Core モジュール）:
-- `schema` / `version`
-- `check_invariants()` / `is_valid()`
-- `copy()` / `to_dict()` / `from_dict()`
-
-設計上の禁止事項:
-- Core に AI / Emotion / Memory / Solver を入れない
-- Constraint は定義のみ（Solver は Physics Engine）
-- Geometry の axes は正規直交を保証
-- Particle0 は次元非依存、Frozen / Mutable 両対応
+| レイヤ | 状態 |
+|--------|------|
+| Capsule v1.3 | 完了（hash 32文字、from_dict 堅牢化、verify helper） |
+| PGRA v1.1 | 完了（スケールパラメータ化） |
+| Core 四本柱 | 完了 |
+| codecs/base.py | Protocol 定義済み |
+| codecs/pgra_codec.py | 骨格実装済み（decode は簡易、encode は動作） |
+| CoreCodec | 未実装 |
+| Pipeline Runtime | 未実装 |
 
 ---
 
-## 4. PGRA v1.0（NEW・Physics Module）
+## 4. 次にやるべきこと（優先順）
 
-**PLP Geometric Relaxation Architecture**
+1. **PGRACodec.decode の本格実装**  
+   ObservationBlock から PhysicalState を正しく復元できるようにする
 
-- Reference を純粋な評価関数に分離（副作用ゼロ）
-- ConvergenceMetric で **Difference + Difference Velocity** を観測
-- 閉ループ幾何緩和（Axiom P1）
-- 優先度付き Reference ソート
-- 現時点は独立実装。将来 Core Adapter で接続予定
+2. **CoreCodec + CoreModule**  
+   同様の Codec + Logic 分離で Core を Capsule 対応にする
 
-主要クラス:
-- `PGRAPhysicsEngine`
-- `DistanceReference` / `StabilityReference`
-- `ConvergenceEngine`
-- `MassWeightedPolicy` + `RelaxationStrategy`
-- `EulerIntegrator`
+3. **Round-trip テスト**  
+   Codec の encode → decode が情報を失わないことを検証
 
-詳細は `PGRA/README.md` を参照。
+4. **簡単な Pipeline 実験**  
+   Capsule → PGRAModule → Capsule の一連の流れを動かす
+
+5. **旧 Kernel / modules の Observer 化**  
+   既存の監視コードを CapsuleBuilder の Observer に寄せる
 
 ---
 
-## 5. Capsule / Kernel（既存）
+## 5. 設計判断メモ
 
-**Capsule v1.2** (`plp_capsule.py`)
-- Header / ObservationBlock / Delta / Integrity
-- Capability Enum + Registry
-- Builder + Serializer + Transport Protocol
-- Semantic-free を維持
-
-**Kernel v10.2** (`plp_kernel.py`)
-- 数値忠実パラメータ確定済み
-- 半径 `std_r ≈ 0.017` 前後まで詰めた実績
-- Hub + Attachment モジュール構成
-
-**監視モジュール**
-- GeometryRadiusMonitor
-- EnergyPartitionMonitor  
-（dataclass + deque + statistics API 済み）
+- Capsule を唯一の境界（Universal Bus）とする
+- Adapter ではなく **Codec** と呼ぶ（役割がより明確）
+- Logic は Capsule を知らない
+- 外部システムは Capsule だけを実装すれば接続できる
+- Semantic Delay / Observer Isolation は Capsule 層で保証する
 
 ---
 
-## 6. 仕様・実験・ライセンス
+## 6. 一言で現状
 
-- **SPEC.md**: MUST/SHALL ベースのプロトコル仕様草案
-- **CAPSULE.md**: Capsule 設計目標（Interpretation Stability 等）
-- **EXPERIMENT_***: 通常入力 vs Capsule の比較整理
-- **LICENSE**: 商用利用禁止・軍事利用禁止
+> **Capsule を共通バスとし、Codec と Logic を分離するアーキテクチャへ移行を開始した。**  
+> PGRA はその第一実装として Codec + Module の骨格が動く状態。  
+> 次は decode の充実と Core 側の対応。
 
----
-
-## 7. 次にやるべきこと（優先順）
-
-1. **PGRA ↔ Core Adapter**  
-   PGRA の PhysicalState / Particle を Core の Particle0 / Geometry / Constraint / Clock に接続
-
-2. **ConstraintSolver の導入**  
-   現在の Reference ベース緩和を、Core Constraint 定義に基づく Solver へ拡張
-
-3. **Core と旧 Kernel の接続**  
-   現行 `plp_kernel.py` を Core 型に寄せるか、Adapter を置く
-
-4. **Capsule ↔ Core / PGRA の Observation 接続**  
-   GeometryObserver / EnergyObserver を Core / PGRA 由来に再実装
-
-5. **SPEC の追記**  
-   Core 四モジュール + PGRA schema を SPEC.md に正式記載
-
-6. **`core/__init__.py`**  
-   公開 API をまとめる
-
----
-
-## 8. 設計判断のメモ
-
-- Core を肥大化させない（Relation / Emotion は modules 側）
-- metadata 名前空間: `plp.*` / `vendor.*` / `experimental.*`
-- ConstraintState: ACTIVE / DISABLED / BROKEN
-- Clock は非破壊 `step()`、paused 時は進まない
-- すべて「記述」と「不変条件」に寄せ、計算は上位へ
-- PGRA は「時間発展 → 静的幾何緩和」の責務分離を徹底
-
----
-
-## 9. 一言で現状
-
-> **PLP Core v1 の四本柱（存在・空間・制約・時間）は揃った。**  
-> **PGRA v1.0（閉ループ幾何緩和）も追加済み。**  
-> 次は Core Adapter と ConstraintSolver、旧 Kernel / Capsule との接合。
+実験は忠実に実際行って。
