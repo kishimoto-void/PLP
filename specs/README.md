@@ -1,12 +1,13 @@
 # PLP Specifications
 
-憲法・正式仕様をここに置く。
+読みやすさ優先の正式仕様。
 
 | 文書 | 内容 |
 |------|------|
-| [../ARCHITECTURE.md](../ARCHITECTURE.md) | 全体アーキテクチャ・Stable ABI（ルートに憲法として残置） |
-| [SPEC.md](SPEC.md) | PLP Protocol 本体 |
+| [../ARCHITECTURE.md](../ARCHITECTURE.md) | 全体構造・Stable ABI（ルート憲法） |
+| [SPEC.md](SPEC.md) | Protocol 本体 |
 | [CODEC_SPEC.md](CODEC_SPEC.md) | Codec 仕様 |
 | [../CAPSULE.md](../CAPSULE.md) | Capsule 設計目標 |
 
-関連コード: `../codecs/base.py`（Stable ABI）, `../plp_capsule.py`
+詳細な旧版・研究ログは **git 履歴** を参照。  
+論文調の考察は `../docs/research/` へ。

@@ -1,17 +1,42 @@
 # Particle Language Protocol (PLP)
 
+**Version**: [1.0.0](CHANGELOG.md) — Stable ABI Checkpoint
+
 > **PLP** is a protocol for transporting immutable observations through stable interfaces, independent of application domains and execution environments.
 
 > **PLP** は、不変な観測情報（Capsule）を安定した契約（Core ABI）を通じて伝達するためのプロトコルであり、実行環境や応用分野から独立して動作する。
 
 ---
 
+## 読む順番（導線）
+
+```text
+README          「PLP とは何か」
+   ↓
+ARCHITECTURE    全体構造・Stable ABI
+   ↓
+CAPSULE         中心概念（観測の輸送単位）
+   ↓
+specs/          正式仕様（SPEC / CODEC_SPEC）
+   ↓
+codecs/ · PGRA/ リファレンス実装
+   ↓
+experiments/    実証結果
+```
+
+---
+
 ## Stable ABI v1.0
 
-**Guaranteed Stable:** Capsule · CapsuleCodec · CapsuleModule · CapsulePipeline · CapsuleSource · CapsuleSink  
-**Extensible:** Runtime · Modules · IO · Observers · References
+**Guaranteed Stable**
 
-詳しくは [ARCHITECTURE.md](ARCHITECTURE.md) · [specs/](specs/) · [CODEC_SPEC](specs/CODEC_SPEC.md)
+- Capsule · CapsuleCodec · CapsuleModule · CapsulePipeline · CapsuleSource · CapsuleSink
+
+**Extensible**
+
+- Runtime · Modules · IO · Observers · References
+
+詳しくは [ARCHITECTURE.md](ARCHITECTURE.md) · [CHANGELOG.md](CHANGELOG.md) · [specs/](specs/)
 
 ---
 
@@ -35,20 +60,19 @@ Source → Pipeline(Modules) → Capsule → FanOut → Sinks
 
 ```text
 PLP/
-├── README.md                 # 入口
-├── ARCHITECTURE.md           # 憲法
-├── HANDOVER.md               # 引き継ぎ
-├── LICENSE
-├── CAPSULE.md                # Capsule 設計目標
-├── plp_capsule.py            # Capsule 実装
-├── plp_kernel.py             # 旧 Kernel
-├── codecs/                   # Stable ABI + PGRACodec
-├── core/                     # 世界定義（Particle0…）
-├── PGRA/                     # 幾何緩和 Module
-├── modules/                  # 監視（将来 observers）
-├── specs/                    # 正式仕様
-└── experiments/              # 実験計画・結果
+├── README.md / ARCHITECTURE.md / HANDOVER.md / CHANGELOG.md
+├── CAPSULE.md / LICENSE / VERSION
+├── plp_capsule.py · plp_kernel.py   # 移行期（次メジャーで core 配下へ予定）
+├── codecs/                          # Stable ABI + PGRACodec
+├── core/                            # 世界定義（Particle0…）
+├── PGRA/                            # Reference Module
+├── modules/
+├── specs/                           # 正式仕様（読みやすさ優先）
+├── experiments/                     # 実験
+└── docs/research/                   # 詳細考察用（任意）
 ```
+
+物理ディレクトリを `plp/core/capsule.py` 等へ揃える作業は **import 互換のため次のメジャーバージョン** で行う。
 
 ---
 
