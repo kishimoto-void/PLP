@@ -1,90 +1,93 @@
 # Particle Language Protocol (PLP)
 
-**Version**: [1.0.0](CHANGELOG.md) — Stable ABI Checkpoint
-
-> **PLP** is a protocol for transporting immutable observations through stable interfaces, independent of application domains and execution environments.
-
-> **PLP** は、不変な観測情報（Capsule）を安定した契約（Core ABI）を通じて伝達するためのプロトコルであり、実行環境や応用分野から独立して動作する。
+> **PLP is a hardware-agnostic and intelligence-neutral common protocol for representing, exchanging, and updating state.**
 
 ---
 
-## 読む順番（導線）
+## Overview
 
-```text
-README          「PLP とは何か」
-   ↓
-ARCHITECTURE    全体構造・Stable ABI
-   ↓
-CAPSULE         中心概念（観測の輸送単位）
-   ↓
-specs/          正式仕様（SPEC / CODEC_SPEC）
-   ↓
-codecs/ · PGRA/ リファレンス実装
-   ↓
-experiments/    実証結果
-```
+Particle Language Protocol (PLP) is **not** an AI framework, agent framework, or machine learning library.
+
+PLP is designed as an **intelligence-neutral (Intelligence = 0)** common specification whose purpose is to provide a unified representation of state, constraints, differences, convergence, and communication between systems.
+
+The repository intentionally contains no built-in intelligence or decision-making. Instead, it provides the fundamental components that higher-level systems can use to construct their own behavior.
 
 ---
 
-## Stable ABI v1.0
+## Design Philosophy
 
-**Guaranteed Stable**
+PLP focuses on a minimal set of universal concepts that are independent of hardware, applications, and AI models.
 
-- Capsule · CapsuleCodec · CapsuleModule · CapsulePipeline · CapsuleSource · CapsuleSink
+**Core concepts include:**
 
-**Extensible**
+- Particle
+- Vector
+- Constraint
+- Reference
+- Difference
+- Convergence
+- Capsule
+- Observer
 
-- Runtime · Modules · IO · Observers · References
-
-詳しくは [ARCHITECTURE.md](ARCHITECTURE.md) · [CHANGELOG.md](CHANGELOG.md) · [specs/](specs/)
-
----
-
-## Core Flow
-
-```text
-Source → Pipeline(Modules) → Capsule → FanOut → Sinks
-```
-
-| 契約 | 役割 |
-|------|------|
-| **Module** | `process(capsule) → capsule` |
-| **Sink** | `consume(capsule) → None` |
-| **Source** | `produce() → capsule` |
-| **Pipeline** | Module 直列のみ |
-| **Codec** | Capsule ⇔ 内部状態 |
+These concepts are designed to remain domain-independent so they can be applied to many different environments.
 
 ---
 
-## Repository layout
+## What PLP Is
 
-```text
-PLP/
-├── README.md / ARCHITECTURE.md / HANDOVER.md / CHANGELOG.md
-├── CAPSULE.md / LICENSE / VERSION
-├── plp_capsule.py · plp_kernel.py   # 移行期（次メジャーで core 配下へ予定）
-├── codecs/                          # Stable ABI + PGRACodec
-├── core/                            # 世界定義（Particle0…）
-├── PGRA/                            # Reference Module
-├── modules/
-├── specs/                           # 正式仕様（読みやすさ優先）
-├── experiments/                     # 実験
-└── docs/research/                   # 詳細考察用（任意）
-```
+PLP is intended to become a common protocol for exchanging and evolving structured state across different systems.
 
-物理ディレクトリを `plp/core/capsule.py` 等へ揃える作業は **import 互換のため次のメジャーバージョン** で行う。
+**Possible applications include:**
 
----
+- LLM runtime capsules
+- Agent systems
+- Robotics
+- Physics simulations
+- Game engines
+- Digital twins
+- Embedded systems
+- Distributed systems
 
-## Quick import
-
-```python
-from plp_capsule import PLPCapsule, CapsuleSerializer, verify_content_hash
-from codecs import CapsulePipeline, FanOutDispatcher, PGRAModule, PGRACodec
-from PGRA import PGRAPhysicsEngine, PhysicalState, DistanceReference
-from core import Particle0, Geometry, Constraint, Clock
-```
+These are examples of applications built **on top of** PLP, not features implemented by PLP itself.
 
 ---
 
-実験は忠実に実際行って。
+## What PLP Is Not
+
+PLP is **not**:
+
+- An AI model
+- A Large Language Model
+- An Agent implementation
+- A Robotics framework
+- A Physics engine
+- A Game engine
+
+Those systems may use PLP as their underlying communication and state representation layer.
+
+---
+
+## Repository Purpose
+
+This repository exists to demonstrate the possibilities of:
+
+- The Particle Language Protocol (PLP)
+- Capsule-based architectures
+- Hardware-independent state representation
+- Model-independent communication
+- Intelligence-neutral system design
+
+It serves as a reference implementation and experimental platform for evaluating how a minimal common protocol can support a wide range of higher-level architectures without embedding intelligence into the protocol itself.
+
+---
+
+## Core Principle
+
+> **PLP does not think.**  
+> **PLP represents.**  
+> **PLP transports.**  
+> **PLP constrains.**  
+> **PLP converges.**
+
+Intelligence belongs to higher layers.  
+PLP remains a minimal and reusable foundation.
