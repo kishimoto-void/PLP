@@ -2,13 +2,13 @@
 
 **日時**: 2026-07-24  
 **リポジトリ**: https://github.com/kishimoto-void/PLP  
-**状態**: Capsule 中心アーキテクチャ確定。Codec 仕様・リファレンス実装・実験・図面まで一通り揃った段階。
+**状態**: レイヤー構造（core / runtime / modules / io）を固定。Memory は Runtime Sink と位置づけ。
 
 ---
 
 ## 1. 設計方針（確定）
 
-PLP は「物理エンジン」や「AIフレームワーク」ではなく、
+PLP は「物理エンジン」ではなく、
 
 > **Capsule を媒介にしたモジュール実行基盤（Protocol Runtime）**
 
@@ -25,115 +25,107 @@ Module Logic（純粋。Capsule を知らない）
    │
    ▼
 Codec.encode()  →  Capsule
+   │
+   ├──► 次の Module（Pipeline）
+   └──► MemorySink / Logger / …（Fan-out）
 ```
 
-| 概念 | 役割 |
-|------|------|
-| **Capsule** | 意味を持たない物理状態の輸送規格（Universal Bus） |
-| **Codec** | Capsule ⇔ 内部状態の変換のみ（ロジックを持たない） |
-| **Module** | 内部状態に対する処理（`process(capsule) -> capsule`） |
+### レイヤー
 
-外部システム（Unity / ROS / MuJoCo / Live2D / LLM）は **Capsule だけ** 読めば接続できる。
+| Layer | 役割 |
+|-------|------|
+| **core** | Capsule / Codec / Module / Pipeline の契約 |
+| **runtime** | Memory / Replay / Scheduler / Bus |
+| **modules** | PGRA などの処理系 |
+| **io** | Logger / Network / 永続 Store |
 
-詳細図は `ARCHITECTURE.md` を参照。
+### Module と Sink
+
+- **Module**: `process(capsule) -> capsule`（産む）
+- **Sink**: `consume(capsule) -> None`（消費する。変更しない）
+
+Memory は **Sink**（Runtime）。PGRA の横並び機能ではない。
+
+詳細: `ARCHITECTURE.md` v1.1
 
 ---
 
-## 2. リポジトリ構成
+## 2. リポジトリ構成（現状 → 目標）
 
 ```
+現状（移行中）:
 PLP/
-├── plp_capsule.py                 # Capsule v1.3
-├── plp_kernel.py                  # 旧数値忠実 Kernel
-├── CODEC_SPEC.md                  # Codec 正式仕様（公理 D1–D8, Non-Goals, 準拠レベル）
-├── ARCHITECTURE.md                # アーキテクチャ図（Mermaid + ASCII）
-├── SPEC.md / CAPSULE.md
-├── core/                          # 世界の定義（Particle0 / Geometry / Constraint / Clock）
-│   └── __init__.py                # 公開 API 明示
-├── PGRA/                          # 幾何緩和エンジン v1.1
-├── codecs/
-│   ├── base.py                    # CapsuleCodec / CapsuleModule Protocol
-│   └── pgra_codec.py              # PGRACodec + PGRAModule（リファレンス実装）
-├── modules/                       # 既存監視モジュール
-├── EXPERIMENT_ROUNDTRIP_PIPELINE.md
-├── EXPERIMENT_RESULTS_ROUNDTRIP_PIPELINE.md   # ALL PASS
-└── HANDOVER.md
+├── plp_capsule.py / codecs/ / core/ / PGRA/ / modules/
+├── CODEC_SPEC.md / ARCHITECTURE.md / SPEC.md / CAPSULE.md
+└── EXPERIMENT_*.md
+
+目標:
+plp/
+├── core/          # capsule, codec, module, pipeline
+├── runtime/       # memory, replay, scheduler, bus
+├── modules/       # pgra, …
+├── io/
+├── observers/
+└── specs/
 ```
+
+新規コードは目標レイヤーの場所に置く。既存は段階移動。
 
 ---
 
 ## 3. 実装状況
 
-| レイヤ | 状態 | 備考 |
-|--------|------|------|
-| Capsule v1.3 | 完了 | hash 32文字、from_dict 堅牢化、verify helper |
-| CODEC_SPEC.md | 完了 | 公理・Non-Goals・準拠レベル・DecodeReport 仕様 |
-| ARCHITECTURE.md | 完了 | 全体図・Codec 内部・Pipeline・境界 |
-| PGRACodec | リファレンス実装 | DecodedState / Level / Confidence / Decoder プラグイン骨格 |
-| PGRA Module | 動作 | process / process_state |
-| Core 四本柱 | 完了 | Codec 接続は未 |
-| CoreCodec | 未実装 | |
-| Pipeline Runtime | 未実装 | |
-| Round-trip 実験 | **ALL PASS** | serialize / process_state / parent_id 連鎖 |
-| Python パッケージ接続 | 整備済み | core / codecs / PGRA / modules の import 経路 |
+| 項目 | 状態 |
+|------|------|
+| Capsule v1.3 | 完了 |
+| CODEC_SPEC | 完了（D1–D8, Non-Goals, 準拠レベル） |
+| ARCHITECTURE v1.1 | 完了（レイヤー + Module/Sink + Fan-out） |
+| PGRACodec リファレンス | 動作 |
+| Round-trip 実験 | ALL PASS |
+| Memory（ローカル草案） | artifacts に MemorySink 方針で再配置予定。**リポジトリ未投入** |
+| CoreCodec | 未 |
+| Pipeline / Bus | 未 |
+| ディレクトリ物理移動 | 未（仕様先行） |
 
 ---
 
 ## 4. 次にやるべきこと（優先順）
 
-1. **DecodeReport / evidence の本格実装**  
-   仕様（CODEC_SPEC）に揃えて、confidence を根拠付きにする
-
-2. **CoreCodec + CoreModule**  
-   同じ Codec 規約で Core を Capsule 対応にする
-
-3. **多段 Pipeline 実験**  
-   Capsule → Core → PGRA → Capsule を1本通す
-
-4. **旧 modules の Observer 化**  
-   geometry_radius_monitor / energy_partition_monitor を CapsuleBuilder Observer に寄せる
+1. **レイヤー骨格の固定を維持**（機能追加より置き場所）
+2. **CapsuleSink Protocol** を core 契約に追加
+3. **MemorySink** を `runtime/memory` として仕様・実装を揃える（リポジトリ投入は推敲後）
+4. **Pipeline + Fan-out** の最小実装
+5. **CoreCodec**（同じ Codec 規約）
+6. 既存ディレクトリの段階的移動
 
 ---
 
-## 5. 設計判断メモ（重要）
+## 5. 設計判断メモ
 
-- Capsule を唯一の境界（Universal Bus）とする
-- Codec は意味を持たない変換層（**Non-Goals を仕様に明記済み**）
-- Logic は Capsule を知らない
-- 準拠レベル（Minimal / Standard / Full）で自己申告可能
-- 配置戦略（円周など）は公理ではなく実装依存
-- 外部システムは Capsule だけ読めば接続できる
-- Semantic Delay / Observer Isolation は Capsule 層で保証する
+- Capsule が唯一の共有境界
+- Module と Sink を分離する
+- Memory は Runtime の append-only Sink（Difference First）
+- Producer と Consumer は互いに知らない（Bus が配る）
+- 機能を増やす前に ARCHITECTURE の置き場所に従う
 
 ---
 
-## 6. 主要なドキュメント
+## 6. 主要ドキュメント
 
 | 文書 | 内容 |
 |------|------|
-| `SPEC.md` | PLP Protocol 本体 |
-| `CAPSULE.md` | Capsule 設計目標 |
+| `ARCHITECTURE.md` | レイヤー・Module/Sink・Fan-out |
 | `CODEC_SPEC.md` | Codec 正式仕様 |
-| `ARCHITECTURE.md` | アーキテクチャ図 |
-| `EXPERIMENT_RESULTS_ROUNDTRIP_PIPELINE.md` | Round-trip / Pipeline 実験結果（ALL PASS） |
+| `SPEC.md` / `CAPSULE.md` | Protocol / Capsule |
+| `EXPERIMENT_RESULTS_ROUNDTRIP_PIPELINE.md` | 実験 ALL PASS |
 
 ---
 
-## 7. import 例（リポジトリルート基準）
+## 7. 一言で現状
 
-```python
-from plp_capsule import PLPCapsule, CapsuleSerializer, verify_content_hash
-from codecs import PGRACodec, PGRAModule, DecodedState, ReconstructionLevel
-from PGRA import PGRAPhysicsEngine, PhysicalState, DistanceReference
-from core import Particle0, Geometry, Constraint, Clock
-```
-
----
-
-## 8. 一言で現状
-
-> **プロトコルとしての設計はほぼ固まった。**  
-> Capsule + Codec Spec + Architecture 図 + PGRA リファレンス実装 + Round-trip 実験（PASS）が揃っている。  
-> 次は DecodeReport の実装充実、CoreCodec、多段 Pipeline。
+> **プロトコルとレイヤーの置き場所は固まった。**  
+> 実装は Capsule + Codec + PGRA リファレンスが通っている。  
+> Memory は Runtime Sink としてローカル草案あり（未 push）。  
+> 次は Sink 契約と Pipeline/Fan-out、その後に配置移動。
 
 実験は忠実に実際行って。

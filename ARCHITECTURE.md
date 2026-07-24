@@ -1,238 +1,261 @@
 # PLP Architecture
 
-**Version**: 1.0  
+**Version**: 1.1  
 **Date**: 2026-07-24  
-**Related**: SPEC.md, CAPSULE.md, CODEC_SPEC.md
+**Related**: SPEC.md, CAPSULE.md, CODEC_SPEC.md, HANDOVER.md
 
 ---
 
-## 1. High-Level View — Capsule as Universal Bus
+## 0. Guiding Principle
+
+> **Capsule だけを知る。互いに知らない。**
+
+PGRA は Memory を知らない。  
+Memory は PGRA を知らない。  
+どちらも Capsule だけを知る。
+
+機能を横並びで増やさない。  
+先にレイヤーを固定し、置き場所を決めてから実装する。
+
+---
+
+## 1. Layer Model (Target)
 
 ```text
-                    ┌──────────────────────────────────────┐
-                    │           External World             │
-                    │  Unity / ROS / MuJoCo / Live2D / LLM │
-                    └──────────────────┬───────────────────┘
-                                       │ Capsule only
-                                       ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│                         PLP Capsule Bus                                  │
-│                                                                          │
-│   Capsule ──► Module ──► Capsule ──► Module ──► Capsule ──► ...          │
-│                                                                          │
-└──────────────────────────────────────────────────────────────────────────┘
-          │                              │
-          │                              │
-          ▼                              ▼
-   ┌─────────────┐                ┌─────────────┐
-   │ Core Module │                │ PGRA Module │
-   │ (定義)      │                │ (収束計算)  │
-   └─────────────┘                └─────────────┘
+plp/
+│
+├── core/                 # プロトコル核（規格・契約）
+│   ├── capsule           # 輸送規格
+│   ├── observation       # 観測ブロック
+│   ├── codec             # Capsule ⇔ State
+│   ├── module            # process(capsule)->capsule 契約
+│   └── pipeline          # 直列合成
+│
+├── runtime/              # 実行時基盤（状態を「持つ・流す」）
+│   ├── memory/           # Capsule Chain の保存・差異・Replay
+│   ├── replay/
+│   ├── scheduler/
+│   └── bus/              # Capsule 配布（fan-out）
+│
+├── modules/              # 処理系（Logic）
+│   ├── pgra/
+│   ├── fractal/
+│   ├── physics/
+│   └── ...
+│
+├── io/                   # 入出力 Sink / Source
+│   ├── store/
+│   ├── logger/
+│   ├── network/
+│   └── visualizer/
+│
+├── observers/            # encode 用の純粋観測
+├── references/           # 幾何基準など
+└── specs/                # SPEC / CODEC_SPEC / CAPSULE / ...
 ```
 
-すべての外部システムは **Capsule だけ** を読めば接続できる。
+| Layer | 役割 | 例 |
+|-------|------|-----|
+| **core** | 規格と契約。意味も計算も持たない | Capsule, Codec Protocol, Module Protocol, Pipeline |
+| **runtime** | 実行時に Capsule を保持・再生・配布する | Memory, Replay, Scheduler, Bus |
+| **modules** | 内部状態に対する純粋処理 | PGRA, Fractal, Physics |
+| **io** | 外部への入出力（Consumer / Producer） | Logger, Network, Store backend |
 
 ---
 
-## 2. Module Internal Structure (Codec + Logic)
+## 2. Module vs Sink
+
+### Module（処理系）
+
+```text
+process(capsule) -> capsule
+```
+
+- Codec で decode → Logic → encode
+- 新しい Capsule を**産む**
+- 例: PGRAModule, CoreModule
+
+### Sink（消費系）
+
+```text
+consume(capsule) -> None
+```
+
+- Capsule を受け取り、保存・記録・転送する
+- Capsule を**変更しない**
+- Observation を**生成しない**
+- 例: MemorySink, LoggerSink, NetworkSink
+
+Memory は Module ではなく **Sink** である。
+
+```text
+# 旧（曖昧）
+MemoryModule.process(capsule)
+
+# 新（責務明確）
+MemorySink.consume(capsule)
+```
+
+---
+
+## 3. Event Fan-out（疎結合）
+
+```text
+Capsule Produced
+        │
+        ├──► MemorySink
+        ├──► LoggerSink
+        ├──► ReplayRecorder
+        ├──► Visualizer
+        └──► NetworkTransport
+```
 
 ```mermaid
 flowchart TD
-    C_in["Input Capsule"] --> DEC["Codec.decode()"]
-    DEC --> DS["DecodedState\n(state, confidence, level, report)"]
-    DS --> LOGIC["Module Logic\n(pure algorithm)\nCapsule を知らない"]
-    LOGIC --> STATE["Internal State"]
-    STATE --> ENC["Codec.encode()"]
-    ENC --> C_out["Output Capsule"]
+    M[Module Logic] --> C[Output Capsule]
+    C --> BUS[Capsule Bus / Fan-out]
+    BUS --> MS[MemorySink]
+    BUS --> LG[LoggerSink]
+    BUS --> NT[NetworkSink]
+    BUS --> VZ[Visualizer]
 
-    style C_in fill:#1a1a2e,stroke:#4a9eff,color:#eee
-    style C_out fill:#1a1a2e,stroke:#4a9eff,color:#eee
-    style DEC fill:#16213e,stroke:#e94560,color:#eee
-    style ENC fill:#16213e,stroke:#e94560,color:#eee
-    style LOGIC fill:#0f3460,stroke:#e94560,color:#eee
-    style DS fill:#533483,stroke:#e94560,color:#eee
-    style STATE fill:#533483,stroke:#e94560,color:#eee
+    style C fill:#1a1a2e,stroke:#4a9eff,color:#eee
+    style BUS fill:#16213e,stroke:#e94560,color:#eee
+    style MS fill:#0f3460,stroke:#e94560,color:#eee
+    style LG fill:#0f3460,stroke:#e94560,color:#eee
+    style NT fill:#0f3460,stroke:#e94560,color:#eee
+    style VZ fill:#0f3460,stroke:#e94560,color:#eee
 ```
+
+Producer（Module）は Consumer（Sink）を知らない。  
+Bus が Capsule を配るだけである。
+
+---
+
+## 4. Pipeline + Sinks
 
 ```text
 Input Capsule
       │
       ▼
-Codec.decode()
-      │
-      ▼
-DecodedState (state, confidence, level, evidence, report)
-      │
-      ▼
-Module Logic  ←── 純粋。Capsule を一切知らない
-      │
-      ▼
-Internal State
-      │
-      ▼
-Codec.encode()
-      │
-      ▼
-Output Capsule
-```
-
----
-
-## 3. Layer Responsibilities
-
-```mermaid
-flowchart LR
-    subgraph External["External"]
-        U[Unity / ROS / LLM / ...]
-    end
-
-    subgraph Bus["Capsule Bus"]
-        CAP[PLP Capsule]
-    end
-
-    subgraph CodecLayer["Codec Layer"]
-        COD[CapsuleCodec]
-        OD[ObservationDecoder plugins]
-    end
-
-    subgraph LogicLayer["Logic Layer"]
-        CORE[Core Module]
-        PGRA[PGRA Module]
-        FUTURE[Fractal / Fluid / ...]
-    end
-
-    U <--> CAP
-    CAP <--> COD
-    COD --> OD
-    COD <--> CORE
-    COD <--> PGRA
-    COD <--> FUTURE
-```
-
-| Layer | Responsibility | Does NOT do |
-|-------|----------------|-------------|
-| **Capsule** | 輸送・観測・時系列・親子関係 | 意味解釈・計算 |
-| **Codec** | Capsule ⇔ 内部状態の変換 | 推論・学習・Simulation・拘束求解 |
-| **Module Logic** | 内部状態に対する処理 | Capsule の直接操作 |
-| **External** | 意味・UI・制御・表示 | PLP 内部状態の直接改変 |
-
----
-
-## 4. Codec Detail (Reference: PGRACodec)
-
-```text
-                    Capsule
-                       │
-          ┌────────────┴────────────┐
-          ▼                         ▼
-   ObservationDecoder          encode path
-   Registry                         │
-          │                         ▼
-   ┌──────┴──────┐            CapsuleBuilder
-   │ Geometry    │            + Observers
-   │ Particles   │                  │
-   │ Radius      │                  ▼
-   │ (Energy…)   │            ObservationBlocks
-   └──────┬──────┘                  │
-          ▼                         ▼
-   DecodedState                 Capsule
-   ├ state
-   ├ confidence   (evidence-based)
-   ├ level        (EXACT/PARTIAL/MINIMAL/EMPTY)
-   ├ evidence
-   └ report       (used/missing/reconstructed/…)
-```
-
----
-
-## 5. Pipeline Composition
-
-```text
-Sensor / Input
-      │
-      ▼
-   Capsule₀
-      │
-      ▼
 ┌─────────────┐
-│ CoreModule  │  世界の定義・検証
+│ CoreModule  │  Module
 └──────┬──────┘
-       │ Capsule₁
+       │ Capsule
        ▼
 ┌─────────────┐
-│ PGRAModule  │  幾何緩和（時間を進めない収束）
+│ PGRAModule  │  Module
 └──────┬──────┘
-       │ Capsule₂
-       ▼
-┌─────────────┐
-│ (Future)    │  Fractal / Renderer / Robotics / …
-└──────┬──────┘
-       │ Capsuleₙ
-       ▼
-   LLM / Unity / ROS / …
+       │ Capsule ──────────────────────────┐
+       ▼                                   │
+   (next Module…)                          ▼
+                                    ┌─────────────┐
+                                    │ MemorySink  │  Runtime
+                                    ├─────────────┤
+                                    │ LoggerSink  │  IO
+                                    └─────────────┘
 ```
 
-各 Module は同じ契約だけを実装する：
+直列は Module の Pipeline。  
+横の分岐は Sink の Fan-out。
+
+---
+
+## 5. Memory の位置づけ
 
 ```text
-process(capsule: PLPCapsule) -> PLPCapsule
+runtime/memory/
+  ├── store.py          # append-only Capsule Index + Episodes
+  ├── difference.py     # Difference First
+  ├── replay.py         # 復元のみ（Simulation ではない）
+  ├── sink.py           # MemorySink.consume(capsule)
+  └── types.py          # Episode / Diff / Drift / Velocity
 ```
+
+- **公理**: Immutable / Episode Chain / Difference First / Replayable / Semantic-Free
+- PGRA の横並び機能ではない
+- Runtime の一部として Capsule Chain を保持する
 
 ---
 
-## 6. Data Flow (Round-trip)
-
-```mermaid
-sequenceDiagram
-    participant Ext as External
-    participant Cap as Capsule
-    participant Cod as Codec
-    participant Log as Module Logic
-
-    Ext->>Cap: Input Capsule
-    Cap->>Cod: decode()
-    Cod->>Cod: ObservationDecoder plugins
-    Cod->>Log: DecodedState.state
-    Note over Log: Capsule を知らない
-    Log->>Log: pure computation
-    Log->>Cod: Internal State
-    Cod->>Cap: encode() → Output Capsule
-    Cap->>Ext: Output Capsule
-```
-
----
-
-## 7. Package Map
+## 6. core 契約（要約）
 
 ```text
-PLP/
-├── plp_capsule.py          ← Capsule 規格本体
-├── CODEC_SPEC.md           ← Codec 正式仕様
-├── ARCHITECTURE.md         ← 本図
-├── core/                   ← 世界の定義（Particle0 / Geometry / Constraint / Clock）
-├── PGRA/                   ← 幾何緩和 Logic
-├── codecs/
-│   ├── base.py             ← CapsuleCodec / CapsuleModule Protocol
-│   └── pgra_codec.py       ← リファレンス実装
-└── modules/                ← 監視系（将来 Observer へ寄せる）
+CapsuleCodec
+  decode(capsule) -> DecodedState
+  encode(state, ...) -> capsule
+
+CapsuleModule
+  process(capsule) -> capsule
+
+CapsuleSink
+  consume(capsule) -> None
+
+Pipeline
+  modules: list[CapsuleModule]
+  sinks:   list[CapsuleSink]    # 各段の出力後に fan-out 可能
+  run(capsule) -> capsule
 ```
 
 ---
 
-## 8. Boundary Summary (Non-Goals reminder)
+## 7. 現リポジトリとの対応（移行方針）
+
+現状はフラットに近い。目標レイヤーへの対応関係：
+
+| 現在 | 目標 |
+|------|------|
+| `plp_capsule.py` | `core/capsule` |
+| `codecs/` | `core/codec` + module 側の参照実装 |
+| `core/` (Particle0…) | 世界定義は `modules/core_world` または `core/world` に整理 |
+| `PGRA/` | `modules/pgra` |
+| `modules/` (monitors) | `observers/` |
+| （未）Memory | `runtime/memory` |
+| SPEC / CODEC_SPEC / … | `specs/` |
+
+**移行原則**
+
+1. 仕様・図を先に固定する（本ドキュメント）
+2. 新規コードは目標レイヤーの場所に置く
+3. 既存コードは壊さず、段階的に移動する
+4. 機能追加より「置き場所の固定」を優先する
+
+---
+
+## 8. Module 内部（従来どおり）
 
 ```text
-┌─────────────────────────────────────────────────────┐
-│  Codec がやらないこと                                │
-│  ✗ 推論  ✗ 学習  ✗ 意味解釈  ✗ Simulation           │
-│  ✗ Constraint 求解  ✗ 状態の破壊的変更               │
-│  ✗ 複数 Capsule の融合                               │
-└─────────────────────────────────────────────────────┘
+Input Capsule
+      │
+      ▼
+Codec.decode() → DecodedState
+      │
+      ▼
+Module Logic（Capsule を知らない）
+      │
+      ▼
+Codec.encode() → Output Capsule
 ```
 
-詳細は `CODEC_SPEC.md` §11 Non-Goals を参照。
+詳細は CODEC_SPEC.md / 旧 §2 を参照。
 
 ---
 
-**Status**: Living document  
+## 9. Non-Goals（レイヤー境界）
+
+| 層 | やらないこと |
+|----|--------------|
+| **core** | 計算・永続化・ネットワーク |
+| **runtime/memory** | 推論・意味・Capsule 変更・Observation 生成 |
+| **modules** | Capsule の永続化・他 Module の直接呼び出し |
+| **io** | 物理計算・幾何緩和 |
+
+---
+
+## 10. 一言
+
+> 機能を増やす前に、**置き場所を決める。**  
+> Capsule だけを共有し、Module と Sink を分ける。  
+> Memory は Runtime の Sink である。
+
 実験は忠実に実際行って。
