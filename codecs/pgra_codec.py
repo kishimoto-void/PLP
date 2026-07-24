@@ -8,6 +8,14 @@ PGRA を Capsule 中心のモジュールとして扱う実装。
   ├── PGRACodec          # Capsule ⇔ PhysicalState
   └── RelaxationEngine   # 純粋な幾何緩和ロジック（Capsule を知らない）
 
+Decoder 公理:
+  D1 Semantic-Free Reconstruction  — 意味を復元しない
+  D2 Snapshot Immutability (≡)     — 破壊的変更をしない
+  D3 Geometric Priority            — 位置・距離を最優先
+  D4 Incomplete Observation Tolerance — 欠落は捏造しない
+  D5 Residue as Global Scalar (≠)  — residue は系全体の数値特徴量
+  D6 Round-trip Fidelity as Goal   — 観測の再現性を基準にする
+
 使用例:
   module = PGRAModule()
   output = module.process(input_capsule)
@@ -15,25 +23,19 @@ PGRA を Capsule 中心のモジュールとして扱う実装。
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from plp_capsule import (
     PLPCapsule,
     CapsuleBuilder,
-    CapsuleHeader,
-    CapsuleFlags,
     InputCapsule,
-    InputReference,
     ObservationBlock,
     Capability,
-    DeltaBlock,
-    CapsuleIntegrity,
-    compute_content_hash,
 )
 from PGRA.state import PhysicalState, Particle, Geometry, GeometryKind
 from PGRA.engine import PGRAPhysicsEngine
-from PGRA.reference import DistanceReference, StabilityReference, Reference
+from PGRA.reference import DistanceReference, Reference
 from .base import CapsuleCodec, CapsuleModule
 
 
@@ -45,7 +47,7 @@ class PGRACodec:
     """
     Capsule ⇔ PhysicalState の相互変換。
 
-    - decode: Observation や必要情報から PhysicalState を構築
+    - decode: Observation から PhysicalState を構築（公理準拠）
     - encode: PhysicalState を観測して Capsule を生成
 
     ロジック（緩和計算）は一切持たない。
@@ -55,26 +57,134 @@ class PGRACodec:
         self.source = source
         self._builder = CapsuleBuilder()
 
-        # デフォルトの観測を登録
+        # 観測の登録順: 幾何 → 粒子詳細 → エネルギー
         self._builder.register(_GeometryRadiusObserver(), priority=10)
+        self._builder.register(_ParticlePositionsObserver(), priority=15)
         self._builder.register(_EnergyKineticObserver(), priority=20)
 
+    # ----------------------------------------------------------
+    # decode  (Axiom D1–D6)
+    # ----------------------------------------------------------
     def decode(self, capsule: PLPCapsule) -> PhysicalState:
         """
-        Capsule から PhysicalState を復元する。
+        Capsule の Observation から PhysicalState を復元する。
 
-        現時点では簡易実装：
-        - observations に粒子情報が含まれている場合はそれを使う
-        - なければ空の PhysicalState を返す（実験用）
+        優先順位 (D3 Geometric Priority):
+          1. 粒子位置の明示的観測 (geometry.particles)
+          2. 集約幾何 (n_particles + mean_radius) からの最小再構成
+          3. 情報が足りなければ空の PhysicalState を返す (D4)
 
-        将来は ObservationBlock の schema に従って厳密に復元する。
+        捏造は行わない。欠落した速度はゼロ、質量は 1.0 をデフォルトとする。
         """
         state = PhysicalState()
 
-        # 簡易: metadata や特定の observation から復元する余地を残す
-        # 現時点では呼び出し側で state を直接渡すケースも想定
+        obs_map = {o.name: o for o in capsule.observations}
+
+        # --- 1. 粒子位置が明示されている場合 (最も忠実) ---
+        if "geometry.particles" in obs_map:
+            particles = self._decode_particle_positions(obs_map["geometry.particles"])
+            for p in particles:
+                state.particles[p.id] = p
+            return state
+
+        # --- 2. 集約情報からの最小再構成 ---
+        n = 0
+        mean_radius = 0.0
+
+        if "geometry.radius" in obs_map:
+            vals = obs_map["geometry.radius"].values
+            n = int(vals.get("n_particles", 0))
+            mean_radius = float(vals.get("mean_radius", 0.0))
+
+        if n <= 0:
+            # 情報不足 → 空状態を返す (D4 Incomplete Observation Tolerance)
+            return state
+
+        # 円周上に等間隔配置する最小再構成（幾何のみ、意味なし）
+        for i in range(n):
+            theta = 2.0 * np.pi * i / n
+            pos = np.array([
+                mean_radius * np.cos(theta),
+                mean_radius * np.sin(theta),
+                0.0,
+            ], dtype=np.float64)
+            pid = f"p{i}"
+            state.particles[pid] = Particle(
+                id=pid,
+                position=pos,
+                velocity=np.zeros(3, dtype=np.float64),
+                mass=1.0,
+            )
+
         return state
 
+    def _decode_particle_positions(self, obs: ObservationBlock) -> List[Particle]:
+        """
+        geometry.particles 観測から粒子リストを復元する。
+
+        期待する values の形式:
+          {
+            "n": 2.0,
+            "ids": "p0,p1",          # カンマ区切り文字列
+            "pos": "0,0,0,1.5,0,0",  # flat x0,y0,z0,x1,y1,z1...
+            "vel": "0,0,0,0,0,0",    # 同様（省略可）
+            "mass": "1.0,1.0",       # 省略可
+          }
+        """
+        vals = obs.values
+        n = int(vals.get("n", 0))
+        if n <= 0:
+            return []
+
+        ids_str = str(vals.get("ids", ""))
+        ids = [s.strip() for s in ids_str.split(",") if s.strip()] if ids_str else [f"p{i}" for i in range(n)]
+
+        pos_flat = self._parse_float_list(vals.get("pos", ""))
+        vel_flat = self._parse_float_list(vals.get("vel", ""))
+        mass_list = self._parse_float_list(vals.get("mass", ""))
+
+        particles: List[Particle] = []
+        for i in range(n):
+            pid = ids[i] if i < len(ids) else f"p{i}"
+
+            if len(pos_flat) >= (i + 1) * 3:
+                pos = np.array(pos_flat[i * 3:(i + 1) * 3], dtype=np.float64)
+            else:
+                # 位置情報欠落 → この粒子は作らない (D4)
+                continue
+
+            if len(vel_flat) >= (i + 1) * 3:
+                vel = np.array(vel_flat[i * 3:(i + 1) * 3], dtype=np.float64)
+            else:
+                vel = np.zeros(3, dtype=np.float64)
+
+            mass = mass_list[i] if i < len(mass_list) else 1.0
+            if mass <= 0:
+                mass = 1.0
+
+            particles.append(Particle(
+                id=pid,
+                position=pos,
+                velocity=vel,
+                mass=float(mass),
+            ))
+
+        return particles
+
+    @staticmethod
+    def _parse_float_list(s: Any) -> List[float]:
+        if not s:
+            return []
+        if isinstance(s, (list, tuple)):
+            return [float(x) for x in s]
+        try:
+            return [float(x) for x in str(s).split(",") if x.strip()]
+        except ValueError:
+            return []
+
+    # ----------------------------------------------------------
+    # encode
+    # ----------------------------------------------------------
     def encode(
         self,
         state: PhysicalState,
@@ -146,6 +256,43 @@ class _GeometryRadiusObserver:
         )
 
 
+class _ParticlePositionsObserver:
+    """
+    粒子の位置・速度・質量を明示的に載せる観測。
+    decode 側がこれを最優先で使う (D3 + D6)。
+    """
+
+    def observe(self, world: Any) -> ObservationBlock:
+        if not isinstance(world, PhysicalState) or not world.particles:
+            return ObservationBlock(
+                name="geometry.particles",
+                schema="plp.geometry.particles.v1",
+                capability=Capability.GEOMETRY.value,
+                values={"n": 0.0},
+            )
+
+        particles = list(world.particles.values())
+        n = len(particles)
+
+        ids = ",".join(p.id for p in particles)
+        pos_flat = ",".join(f"{v:.8g}" for p in particles for v in p.position)
+        vel_flat = ",".join(f"{v:.8g}" for p in particles for v in p.velocity)
+        mass_flat = ",".join(f"{p.mass:.8g}" for p in particles)
+
+        return ObservationBlock(
+            name="geometry.particles",
+            schema="plp.geometry.particles.v1",
+            capability=Capability.GEOMETRY.value,
+            values={
+                "n": float(n),
+                "ids": ids,
+                "pos": pos_flat,
+                "vel": vel_flat,
+                "mass": mass_flat,
+            },
+        )
+
+
 class _EnergyKineticObserver:
     def observe(self, world: Any) -> ObservationBlock:
         if not isinstance(world, PhysicalState) or not world.particles:
@@ -198,10 +345,13 @@ class PGRAModule:
         """
         Input Capsule → decode → relax → encode → Output Capsule
         """
-        # 1. Decode（現時点では呼び出し側で state を用意するケースも多いため、
-        #    エンジンが既に state を持っている場合はそのまま使う）
-        # 将来 decode を本格実装したときにここで上書きする
-        state = self.engine.state
+        # 1. Decode (Axiom-driven)
+        state = self.codec.decode(capsule)
+
+        # decode で粒子が得られなかった場合は、既存 engine.state を維持
+        # （実験時の後方互換）
+        if state.particles:
+            self.engine.state = state
 
         # 2. Logic（純粋な幾何緩和。Capsule を知らない）
         self.engine.geometric_relaxation(
@@ -216,8 +366,11 @@ class PGRAModule:
             source="PGRAModule",
         )
 
-    # 実験・デバッグ用の便利メソッド
-    def process_state(self, state: PhysicalState, previous: Optional[PLPCapsule] = None) -> PLPCapsule:
+    def process_state(
+        self,
+        state: PhysicalState,
+        previous: Optional[PLPCapsule] = None,
+    ) -> PLPCapsule:
         """内部状態を直接渡して処理したい場合（実験用）"""
         self.engine.state = state
         self.engine.geometric_relaxation(
