@@ -285,16 +285,35 @@ MINIMAL レベルで位置を再構成する場合、配置方法（円周・格
 
 ---
 
-## 11. 将来拡張（Reserved）
+## 11. Non-Goals（やらないこと）
+
+Codec の境界を明確に保つため、以下は **意図的に行わない**。
+
+| 項目 | 理由 |
+|------|------|
+| **推論しない** | 観測されていない情報を推測して補完しない（D4） |
+| **学習しない** | パラメータ更新・適応・オンライン学習を持たない |
+| **意味解釈しない** | 感情・意図・文脈・記号的意味を一切扱わない（D1） |
+| **Simulation しない** | 時間発展・積分・物理ステップを実行しない。それは Module Logic の責務 |
+| **Constraint を解かない** | 拘束充足・緩和計算は Module（例: PGRA）の責務 |
+| **Observer を呼ばない** | encode 時に Observation を生成するのは Codec の内部実装だが、外部の Observer フレームワークを駆動しない |
+| **状態を破壊的に変更しない** | 入力 Capsule や既存状態を in-place で書き換えない（D2） |
+| **複数 Capsule を融合しない** | 1 Capsule → 1 DecodedState が基本単位。融合は上位の責務 |
+
+これらの Non-Goals に反する機能が必要になった場合は、Codec ではなく Module または別レイヤで実装する。
+
+---
+
+## 12. 将来拡張（Reserved）
 
 - Tensor / Graph / PointCloud Observation の Decoder
 - 時系列 Capsule からの状態推定（ただし意味推論は禁止）
-- 複数 Capsule の融合 decode
+- 複数 Capsule の融合 decode（上位レイヤ）
 - Binary Capsule との往復
 
 ---
 
-## 12. Related Documents
+## 13. Related Documents
 
 - `SPEC.md` — PLP Protocol 本体
 - `CAPSULE.md` — Capsule 設計目標
