@@ -2,74 +2,50 @@
 
 **日時**: 2026-07-24  
 **リポジトリ**: https://github.com/kishimoto-void/PLP  
-**状態**: レイヤー構造（core / runtime / modules / io）を固定。Memory は Runtime Sink と位置づけ。
+**状態**: **Core Stable ABI v1.0 固定**。以降は契約の上に Runtime / Modules を積む。
 
 ---
 
-## 1. 設計方針（確定）
+## 1. Core Stable ABI v1.0（変更しない）
 
-PLP は「物理エンジン」ではなく、
-
-> **Capsule を媒介にしたモジュール実行基盤（Protocol Runtime）**
-
-### 基本単位
-
-```
+```text
 Capsule
-   │
-   ▼
-Codec.decode()  →  DecodedState
-   │
-   ▼
-Module Logic（純粋。Capsule を知らない）
-   │
-   ▼
-Codec.encode()  →  Capsule
-   │
-   ├──► 次の Module（Pipeline）
-   └──► MemorySink / Logger / …（Fan-out）
+CapsuleCodec     decode / encode
+CapsuleModule    process(capsule) -> capsule
+CapsulePipeline  直列 Module のみ
+CapsuleSource    produce() -> capsule
+CapsuleSink      consume(capsule) -> None
 ```
 
-### レイヤー
+補助実装（契約を増やさない）:
 
-| Layer | 役割 |
-|-------|------|
-| **core** | Capsule / Codec / Module / Pipeline の契約 |
-| **runtime** | Memory / Replay / Scheduler / Bus |
-| **modules** | PGRA などの処理系 |
-| **io** | Logger / Network / 永続 Store |
+- `FanOutDispatcher` — Sink へ配るだけ
+- `CapsuleRuntime` — Source → Pipeline → FanOut の薄い配線
 
-### Module と Sink
+実装: `codecs/base.py`  
+図: `ARCHITECTURE.md` v1.2
 
-- **Module**: `process(capsule) -> capsule`（産む）
-- **Sink**: `consume(capsule) -> None`（消費する。変更しない）
+### 役割分担
 
-Memory は **Sink**（Runtime）。PGRA の横並び機能ではない。
-
-詳細: `ARCHITECTURE.md` v1.1
+| 概念 | 役割 |
+|------|------|
+| **Pipeline** | 変換のみ |
+| **Runtime** | 観測・保存・配信（Sink Fan-out） |
+| **Module** | 産む |
+| **Sink** | 消費する（変更しない） |
+| **Source** | 入口 |
 
 ---
 
-## 2. リポジトリ構成（現状 → 目標）
+## 2. レイヤー
 
+```text
+core/       Stable ABI
+runtime/    Memory, Replay, Scheduler, Bus, Metrics
+modules/    PGRA, Fractal, …
+io/         Logger, Network, Store backend
+specs/      SPEC, CODEC_SPEC, CAPSULE, ARCHITECTURE
 ```
-現状（移行中）:
-PLP/
-├── plp_capsule.py / codecs/ / core/ / PGRA/ / modules/
-├── CODEC_SPEC.md / ARCHITECTURE.md / SPEC.md / CAPSULE.md
-└── EXPERIMENT_*.md
-
-目標:
-plp/
-├── core/          # capsule, codec, module, pipeline
-├── runtime/       # memory, replay, scheduler, bus
-├── modules/       # pgra, …
-├── io/
-├── observers/
-└── specs/
-```
-
-新規コードは目標レイヤーの場所に置く。既存は段階移動。
 
 ---
 
@@ -78,54 +54,60 @@ plp/
 | 項目 | 状態 |
 |------|------|
 | Capsule v1.3 | 完了 |
-| CODEC_SPEC | 完了（D1–D8, Non-Goals, 準拠レベル） |
-| ARCHITECTURE v1.1 | 完了（レイヤー + Module/Sink + Fan-out） |
-| PGRACodec リファレンス | 動作 |
+| CODEC_SPEC | 完了 |
+| Core ABI (Source/Sink/Pipeline/FanOut) | **完了** |
+| ARCHITECTURE v1.2 | 完了 |
+| PGRACodec / PGRAModule | リファレンス動作 |
 | Round-trip 実験 | ALL PASS |
-| Memory（ローカル草案） | artifacts に MemorySink 方針で再配置予定。**リポジトリ未投入** |
-| CoreCodec | 未 |
-| Pipeline / Bus | 未 |
-| ディレクトリ物理移動 | 未（仕様先行） |
+| MemorySink（ローカル） | 草案あり・**未 push** |
+| ディレクトリ物理再配置 | 未（仕様先行） |
 
 ---
 
-## 4. 次にやるべきこと（優先順）
+## 4. 次の優先順
 
-1. **レイヤー骨格の固定を維持**（機能追加より置き場所）
-2. **CapsuleSink Protocol** を core 契約に追加
-3. **MemorySink** を `runtime/memory` として仕様・実装を揃える（リポジトリ投入は推敲後）
-4. **Pipeline + Fan-out** の最小実装
-5. **CoreCodec**（同じ Codec 規約）
-6. 既存ディレクトリの段階的移動
-
----
-
-## 5. 設計判断メモ
-
-- Capsule が唯一の共有境界
-- Module と Sink を分離する
-- Memory は Runtime の append-only Sink（Difference First）
-- Producer と Consumer は互いに知らない（Bus が配る）
-- 機能を増やす前に ARCHITECTURE の置き場所に従う
+1. **新機能を安易に Core に足さない**（ABI 固定を守る）
+2. MemorySink を runtime として推敲 → 必要ならリポジトリ投入
+3. 最小 Pipeline + FanOut の結合実験
+4. CoreCodec（世界定義側）
+5. 段階的なディレクトリ移動
 
 ---
 
-## 6. 主要ドキュメント
+## 5. 設計判断
 
-| 文書 | 内容 |
-|------|------|
-| `ARCHITECTURE.md` | レイヤー・Module/Sink・Fan-out |
-| `CODEC_SPEC.md` | Codec 正式仕様 |
-| `SPEC.md` / `CAPSULE.md` | Protocol / Capsule |
-| `EXPERIMENT_RESULTS_ROUNDTRIP_PIPELINE.md` | 実験 ALL PASS |
+- Module と Sink を分離した
+- Pipeline は Sink を知らない
+- FanOut だけが Sink 一覧を持つ
+- Source / Sink / Module が揃い、入口→変換→消費が全部 Protocol
+- Core を Stable ABI として固定し、拡張は Runtime / Modules 側
 
 ---
 
-## 7. 一言で現状
+## 6. import 例
 
-> **プロトコルとレイヤーの置き場所は固まった。**  
-> 実装は Capsule + Codec + PGRA リファレンスが通っている。  
-> Memory は Runtime Sink としてローカル草案あり（未 push）。  
-> 次は Sink 契約と Pipeline/Fan-out、その後に配置移動。
+```python
+from codecs import (
+    CapsulePipeline,
+    FanOutDispatcher,
+    CapsuleRuntime,
+    CapsuleSink,
+    CapsuleSource,
+    PGRAModule,
+)
+
+pipeline = CapsulePipeline().add(pgra_module)
+dispatcher = FanOutDispatcher().add(memory_sink)
+runtime = CapsuleRuntime(pipeline=pipeline, dispatcher=dispatcher)
+out = runtime.step(input_capsule)
+```
+
+---
+
+## 7. 一言
+
+> **Core 契約は v1.0 として固定した。**  
+> 以降は PGRA / Memory / Logger などをその上に積むだけ。  
+> 機能追加より契約の安定を優先する。
 
 実験は忠実に実際行って。

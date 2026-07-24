@@ -1,16 +1,18 @@
 """
-PLP Codecs
-==========
-Capsule ⇔ 内部状態 の相互変換層。
-
-設計原則:
-- Codec は変換だけを担当する（ロジックを持たない）
-- Logic は Capsule を一切知らない
-- Round-trip テストが容易
-- Capsule のバージョン変更は Codec のみに影響する
+PLP Codecs & Core Contracts
+===========================
+Stable ABI v1.0 + リファレンス Codec 実装。
 """
 
-from .base import CapsuleCodec, CapsuleModule
+from .base import (
+    CapsuleCodec,
+    CapsuleModule,
+    CapsuleSink,
+    CapsuleSource,
+    CapsulePipeline,
+    FanOutDispatcher,
+    CapsuleRuntime,
+)
 from .pgra_codec import (
     PGRACodec,
     PGRAModule,
@@ -19,8 +21,15 @@ from .pgra_codec import (
 )
 
 __all__ = [
+    # Stable ABI
     "CapsuleCodec",
     "CapsuleModule",
+    "CapsuleSink",
+    "CapsuleSource",
+    "CapsulePipeline",
+    "FanOutDispatcher",
+    "CapsuleRuntime",
+    # Reference implementation
     "PGRACodec",
     "PGRAModule",
     "DecodedState",
