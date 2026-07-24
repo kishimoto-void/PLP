@@ -1,51 +1,49 @@
 # PLP 引き継ぎメモ
 
 **日時**: 2026-07-24  
-**Version**: **1.0.0**（Stable ABI Checkpoint）  
+**Version**: **1.0.0**（Stable ABI Checkpoint） + Runtime Memory 追加  
 **リポジトリ**: https://github.com/kishimoto-void/PLP
 
 ---
 
 ## 状態
 
-設計段階を終え、**育てられるプロジェクト**として区切った。
-
 - Stable ABI v1.0 凍結
+- **MemorySink を `runtime/memory/` に追加済み**（Runtime Sink）
 - 導線: README → ARCHITECTURE → CAPSULE → specs → code → experiments
-- 物理パッケージ再配置は次メジャー（互換のため）
 
 ---
 
-## Guaranteed Stable
+## Guaranteed Stable (Core)
 
 Capsule · Codec · Module · Pipeline · Source · Sink  
 → `plp_capsule.py` + `codecs/base.py`
 
-## Reference
+## Runtime（拡張）
 
-- PGRA Module + PGRACodec
-- Round-trip 実験 ALL PASS（`experiments/`）
+| パス | 内容 |
+|------|------|
+| `runtime/memory/` | MemorySink · Store · Difference · Replay |
 
-## 未着手 / 草案
+```python
+from runtime.memory import MemorySink
+sink = MemorySink()
+sink.consume(capsule)
+ep = sink.close_episode(tags=["run"])
+```
 
-- MemorySink（ローカル草案・未 push）
+Core 契約は `consume` のみ。Difference / Episode は Sink 固有 API。
+
+## Reference Module
+
+PGRA + PGRACodec · Round-trip experiments ALL PASS
+
+## 未着手
+
 - CoreCodec
-- ディレクトリの `plp/core/` 化
+- ディレクトリの `plp/core/` 化（次メジャー）
+- Memory 永続バックエンド
 
 ---
-
-## 次の方針
-
-1. Core を動かさない
-2. Runtime / Modules / IO を契約の上に積む
-3. 詳細研究メモは `docs/research/` または git 履歴
-4. 破壊的なパス変更はメジャーバージョンで
-
----
-
-## 一言
-
-> **v1.0.0 で区切った。PGRA は PLP 上の一つの Module。**  
-> 憲法は README / ARCHITECTURE / specs。実装は契約に従う。
 
 実験は忠実に実際行って。
