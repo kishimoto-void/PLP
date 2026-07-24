@@ -1,104 +1,133 @@
 # PLP Architecture
 
-**Version**: 1.2  
+**Version**: 1.2 (Stable ABI v1.0 checkpoint)  
 **Date**: 2026-07-24  
-**Related**: SPEC.md, CAPSULE.md, CODEC_SPEC.md, HANDOVER.md
+**Related**: SPEC.md, CAPSULE.md, CODEC_SPEC.md, HANDOVER.md, README.md
 
 ---
 
-## 0. Guiding Principle
+## Definition
+
+> **PLP (Particle Language Protocol)** is a protocol for transporting immutable observations through stable interfaces, independent of application domains and execution environments.
+
+> **PLP** は、不変な観測情報（Capsule）を安定した契約（Core ABI）を通じて伝達するためのプロトコルであり、実行環境や応用分野から独立して動作する。
+
+---
+
+## Stable ABI v1.0 — Freeze Scope
+
+### Guaranteed Stable（互換を維持する）
+
+| 契約 | 定義 |
+|------|------|
+| **Capsule** | 不変な観測の輸送単位（`plp_capsule.py`） |
+| **CapsuleCodec** | `decode` / `encode` |
+| **CapsuleModule** | `process(capsule) -> capsule` |
+| **CapsulePipeline** | Module の直列合成のみ |
+| **CapsuleSource** | `produce() -> capsule` |
+| **CapsuleSink** | `consume(capsule) -> None` |
+
+これらは **v1.0 として凍結**する。  
+メソッドの追加・削除・意味の変更は行わない。
+
+実装: `codecs/base.py` + `plp_capsule.py`
+
+### Extensible（自由に拡張してよい）
+
+| 領域 | 例 |
+|------|-----|
+| **Runtime** | MemorySink, Replay, Scheduler, Metrics, FanOut の登録内容 |
+| **Modules** | PGRA, Fractal, Physics, … |
+| **IO** | Logger, Network, FileSource, SocketSource, Visualizer |
+| **Observers** | geometry / energy 等の観測プラグイン |
+| **References** | DistanceReference 等の幾何基準 |
+
+### 参考配線（契約を増やさない）
+
+| 型 | 位置づけ |
+|----|----------|
+| **FanOutDispatcher** | Runtime 補助。Sink 一覧を持ち配るだけ |
+| **CapsuleRuntime** | Source → Pipeline → FanOut の薄いループ |
+
+Protocol の表面積は増やさない。便利な配線に留める。
+
+---
+
+## Guiding Principle
 
 > **Capsule だけを知る。互いに知らない。**
 
-Core 契約（Stable ABI）は変更しない。  
-Runtime / Modules / IO はその上に自由に積む。
+Core 契約は変更しない。  
+Runtime / Modules / IO はその上に積む。
 
 ---
 
-## 1. Core Stable ABI v1.0
-
-```text
-Core (変更しない契約)
-├── Capsule
-├── CapsuleCodec      decode / encode
-├── CapsuleModule     process(capsule) -> capsule
-├── CapsulePipeline   直列 Module 合成のみ
-├── CapsuleSource     produce() -> capsule
-└── CapsuleSink       consume(capsule) -> None
-```
-
-| 契約 | 役割 |
-|------|------|
-| **Module** | 変換（産む） |
-| **Sink** | 消費（変更しない） |
-| **Source** | 入口 |
-| **Pipeline** | Module の直列のみ。Sink を知らない |
-| **Codec** | Capsule ⇔ 内部状態。ロジックなし |
-
-実装場所: `codecs/base.py`
-
----
-
-## 2. Pipeline vs Runtime
-
-```text
-Pipeline（変換）
-
-  Capsule → Module → Module → Capsule
-
-Runtime（観測・保存・配信）
-
-  Capsule
-        │
-        ├ MemorySink
-        ├ LoggerSink
-        ├ MetricsSink
-        └ Visualizer
-```
+## Core Flow
 
 ```text
 Source
   ↓
-Pipeline (Modules only)
+Pipeline (Modules only)     ← 変換
   ↓
 Capsule
   ↓
-FanOutDispatcher
+FanOutDispatcher            ← 観測・保存・配信
   ├── MemorySink
   ├── LoggerSink
   ├── NetworkTransport
   └── …
 ```
 
-- **Module は Dispatcher を知らない**
-- **Dispatcher だけが Sink 一覧を持つ**
-- Sink の追加・削除はプラグイン
+| 概念 | 役割 |
+|------|------|
+| **Pipeline** | 変換のみ。Sink を知らない |
+| **Runtime** | 観測・保存・配信（Sink Fan-out） |
+| **Module** | 産む `process` |
+| **Sink** | 消費する `consume`（変更しない） |
+| **Source** | 入口 `produce` |
 
 ---
 
-## 3. Layer Model
+## Layer Model (Target)
 
 ```text
 plp/
 ├── core/          # Stable ABI（Capsule, Codec, Module, Pipeline, Source, Sink）
-├── runtime/       # Memory, Replay, Scheduler, FanOut, Metrics
+├── runtime/       # Memory, Replay, Scheduler, Bus, Metrics
 ├── modules/       # PGRA, Fractal, Physics, …
 ├── io/            # Logger, Network, persistent Store, Visualizer
 ├── observers/
 ├── references/
-└── specs/
+└── specs/         # SPEC, CODEC_SPEC, CAPSULE, ARCHITECTURE
 ```
-
-| Layer | 拡張方針 |
-|-------|----------|
-| **core** | 契約固定。安易に増やさない |
-| **runtime** | 自由に拡張（Sink 中心） |
-| **modules** | 自由に拡張（Module 中心） |
-| **io** | 自由に拡張（Source / Sink） |
 
 ---
 
-## 4. Minimal Protocols
+## Directory Reality Check（現状）
+
+**ドキュメントの目標レイアウトと、物理ディレクトリはまだ一致していない。**  
+仕様を先行固定し、移動は段階的に行う。
+
+| 現在のパス | 目標上の位置 | 状態 |
+|------------|--------------|------|
+| `plp_capsule.py` | core/capsule | 契約本体・安定 |
+| `codecs/base.py` | core contracts | **Stable ABI 実装済み** |
+| `codecs/pgra_codec.py` | modules/pgra + codec | リファレンス実装 |
+| `core/` (Particle0…) | world 定義 | 存在（Codec 接続は未） |
+| `PGRA/` | modules/pgra | 存在 |
+| `modules/` (monitors) | observers/ | 存在 |
+| Memory | runtime/memory | **ローカル草案のみ・未 push** |
+| `*_SPEC.md` / `ARCHITECTURE.md` | specs/ | ルートに配置（憲法） |
+
+### Core 配下の監査
+
+- `codecs/base.py` に実験コードは含まれない
+- Protocol + Pipeline + FanOut/Runtime 配線のみ
+- PGRA・Memory・実験スクリプトは Core 契約ファイルに混在していない
+
+---
+
+## Minimal Protocols
 
 ```python
 class CapsuleModule(Protocol):
@@ -111,75 +140,24 @@ class CapsuleSource(Protocol):
     def produce(self) -> PLPCapsule: ...
 ```
 
-これ以上のメソッドを Core に足さない。  
-検索・close・connect などは各実装の固有 API とする。
+検索・close・connect などは各実装の固有 API。Core に足さない。
 
 ---
 
-## 5. FanOutDispatcher
-
-```python
-dispatcher = FanOutDispatcher()
-dispatcher.add(memory_sink)
-dispatcher.add(logger_sink)
-
-out = pipeline.run(capsule)
-dispatcher.dispatch(out)
-```
-
-または:
-
-```python
-runtime = CapsuleRuntime(
-    source=file_source,
-    pipeline=pipeline,
-    dispatcher=dispatcher,
-)
-out = runtime.step()
-```
-
----
-
-## 6. Memory の位置
-
-`runtime/memory` — **MemorySink**（`consume` のみが Core 契約）
-
-- append-only Capsule Chain
-- Difference / Replay / Drift は Sink 固有 API
-- PGRA を知らない / PGRA も Memory を知らない
-
----
-
-## 7. 現リポジトリ対応
-
-| 現在 | 目標 |
-|------|------|
-| `plp_capsule.py` | core/capsule |
-| `codecs/base.py` | **Core Stable ABI（実装済み）** |
-| `codecs/pgra_codec.py` | modules/pgra + codec 参照実装 |
-| `PGRA/` | modules/pgra |
-| `core/` (Particle0…) | world 定義（modules または core/world） |
-| Memory（ローカル） | runtime/memory（未 push） |
-
-新規は契約に従う。物理ディレクトリ移動は段階的。
-
----
-
-## 8. Non-Goals（Core）
-
-Core 契約は以下をやらない・持たない:
+## Non-Goals（Core）
 
 - 永続化・ネットワーク・UI
 - 推論・学習・意味解釈
-- Sink の検索 API の統一
+- Sink 検索 API の統一
 - Module 間の直接呼び出し規約
+- 実験コードの混入
 
 ---
 
-## 9. 一言
+## 一言
 
-> **Core = 変更しない契約。**  
+> **Core = 変更しない契約（Stable ABI v1.0）。**  
 > Pipeline は変換、Runtime は観測・保存・配信。  
-> Source → Pipeline → FanOut → Sinks が全体像。
+> 以降は契約を動かさず、Runtime / Modules / IO を育てる。
 
 実験は忠実に実際行って。

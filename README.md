@@ -1,162 +1,101 @@
-Particle Language Program (PLP)
+# Particle Language Protocol (PLP)
 
-Overview
+> **PLP** is a protocol for transporting immutable observations through stable interfaces, independent of application domains and execution environments.
 
-Particle Language Program (PLP) は、自然言語を直接解釈するシステムではありません。
-
-PLPは入力を**粒子世界（Particle World）**へ投影し、その物理状態のみを観測・カプセル化して外部へ渡すための中立的なランタイムです。
-
-PLP自身は、
-
-- 単語の意味
-- 感情
-- 文脈
-- 意図
-
-を一切保持しません。
-
-意味の解釈は受信したLLM（ChatGPT、Claude、Gemini、Grokなど）が担当します。
-
-PLPは**「意味を持たない物理世界」**を提供します。
+> **PLP** は、不変な観測情報（Capsule）を安定した契約（Core ABI）を通じて伝達するためのプロトコルであり、実行環境や応用分野から独立して動作する。
 
 ---
 
-Architecture (Capsule-centric)
+## Stable ABI v1.0
 
-```
-Capsule
-   │
-   ▼
-Codec.decode()  →  DecodedState
-   │
-   ▼
-Module Logic（純粋。Capsule を知らない）
-   │
-   ▼
-Codec.encode()  →  Capsule
+**Guaranteed Stable**
+
+- Capsule
+- CapsuleCodec
+- CapsuleModule
+- CapsulePipeline
+- CapsuleSource
+- CapsuleSink
+
+**Extensible**
+
+- Runtime（Memory, Replay, Metrics, …）
+- Modules（PGRA, Fractal, …）
+- IO（Logger, Network, Sources, …）
+- Observers / References
+
+詳細: [`ARCHITECTURE.md`](ARCHITECTURE.md) · [`CODEC_SPEC.md`](CODEC_SPEC.md) · [`SPEC.md`](SPEC.md)
+
+---
+
+## Core Flow
+
+```text
+Source → Pipeline(Modules) → Capsule → FanOut → Sinks
 ```
 
-- **Capsule** = 意味を持たない物理状態の輸送規格（Universal Bus）
-- **Codec**  = Capsule ⇔ 内部状態の変換のみ（ロジックを持たない）
-- **Module** = 内部状態に対する処理（`process(capsule) -> capsule`）
+| 契約 | 役割 |
+|------|------|
+| **Module** | `process(capsule) → capsule`（変換） |
+| **Sink** | `consume(capsule) → None`（消費・変更しない） |
+| **Source** | `produce() → capsule`（入口） |
+| **Pipeline** | Module の直列のみ。Sink を知らない |
+| **Codec** | Capsule ⇔ 内部状態。ロジックなし |
 
-詳細は `CODEC_SPEC.md` / `SPEC.md` / `CAPSULE.md` を参照。
-
----
-
-Design Philosophy
-
-従来のLLMでは、
-
-Input
- ↓
-Tokenizer
- ↓
-Embedding
- ↓
-Transformer
- ↓
-Meaning
-
-という流れになります。
-
-PLPでは、
-
-Input
- ↓
-Particle World
- ↓
-Geometry / Constraint / Vector / Phase / Energy / Topology
- ↓
-Observer
- ↓
-PLP Capsule
- ↓
-LLM
- ↓
-Meaning
-
-となります。
-
-つまり、
-
-意味の生成をLLMまで遅延させる
-
-ことがPLP最大の特徴です。
+PLP 自身は単語の意味・感情・文脈・意図を保持しない。  
+意味の解釈は Capsule を受け取った側（LLM 等）が行う。
 
 ---
 
-Core Principles
-
-1. Semantic Free — PLPは意味を知りません
-2. Observer First — 観測のみ。推論・分類をしない
-3. Language Independent — 実装言語に依存しない
-4. LLM Independent — 同じCapsuleをどのLLMにも送れる
-
----
-
-Repository Layout
-
-```
-PLP/
-├── plp_capsule.py          # Capsule v1.3
-├── plp_kernel.py           # 旧数値忠実 Kernel
-├── CODEC_SPEC.md           # Codec 正式仕様
-├── SPEC.md / CAPSULE.md
-├── core/                   # 世界の定義（Particle0 / Geometry / Constraint / Clock）
-├── PGRA/                   # 幾何緩和エンジン
-├── codecs/                 # Capsule ⇔ 内部状態（PGRACodec リファレンス）
-├── modules/                # 監視モジュール
-└── EXPERIMENT_*.md
-```
-
----
-
-Quick import (from repo root)
+## Quick import
 
 ```python
 from plp_capsule import PLPCapsule, CapsuleSerializer, verify_content_hash
-from codecs import PGRACodec, PGRAModule, DecodedState, ReconstructionLevel
+from codecs import (
+    CapsulePipeline,
+    FanOutDispatcher,
+    CapsuleRuntime,
+    PGRAModule,
+    PGRACodec,
+    DecodedState,
+)
 from PGRA import PGRAPhysicsEngine, PhysicalState, DistanceReference
 from core import Particle0, Geometry, Constraint, Clock
 ```
 
 ---
 
-Why PLP?
+## Repository layout (current)
 
-通常のAIは入力を直接意味へ変換します。
+```text
+PLP/
+├── plp_capsule.py          # Capsule 規格
+├── codecs/
+│   ├── base.py             # Stable ABI v1.0
+│   └── pgra_codec.py       # リファレンス Codec / Module
+├── core/                   # 世界定義（Particle0 / Geometry / Constraint / Clock）
+├── PGRA/                   # 幾何緩和 Module
+├── modules/                # 監視（将来 observers へ）
+├── ARCHITECTURE.md         # 憲法
+├── CODEC_SPEC.md / SPEC.md / CAPSULE.md
+└── EXPERIMENT_*.md
+```
 
-PLPは一度物理状態へ変換し、
-
-意味を持たない情報
-
-として保存・送信します。
-
-これにより
-
-- AI非依存
-- 言語非依存
-- 実装非依存
-
-な中間表現を提供します。
-
-PLPはAIそのものではなく、
-
-「物理状態を運ぶための共通プロトコル兼ランタイム」
-
-として設計されています。
+目標レイヤー（core / runtime / modules / io / specs）への物理移動は段階的。仕様は先行固定済み。
 
 ---
 
-License
+## Design principles
 
-Particle Language Program (PLP)
+1. **Semantic Free** — 意味を知らない
+2. **Observer First** — 観測のみ。推論しない
+3. **Stable Core** — ABI を安易に変えない
+4. **Extensible Edges** — Runtime / Modules / IO は自由に積む
 
-A language-independent and LLM-independent particle dynamics runtime for transmitting semantic-free physical state capsules.
+---
 
-The meaning is never generated inside PLP.
+## License
 
-Meaning begins only when the receiving intelligence interprets the capsule.
+See `LICENSE`.
 
 実験は忠実に実際行って。
