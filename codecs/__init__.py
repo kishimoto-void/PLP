@@ -11,11 +11,18 @@ Capsule ⇔ 内部状態 の相互変換層。
 """
 
 from .base import CapsuleCodec, CapsuleModule
-from .pgra_codec import PGRACodec, PGRAModule
+from .pgra_codec import (
+    PGRACodec,
+    PGRAModule,
+    DecodedState,
+    ReconstructionLevel,
+)
 
 __all__ = [
     "CapsuleCodec",
     "CapsuleModule",
     "PGRACodec",
     "PGRAModule",
+    "DecodedState",
+    "ReconstructionLevel",
 ]
