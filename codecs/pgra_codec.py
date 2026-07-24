@@ -15,6 +15,8 @@ Decoder 公理:
   D4 Incomplete Observation Tolerance — 欠落は捏造しない
   D5 Residue as Global Scalar (≠)  — residue は系全体の数値特徴量
   D6 Round-trip Fidelity as Goal   — 観測の再現性を基準にする
+  D7 Confidence                    — 復元結果に信頼度を付与
+  D8 Reconstruction Level          — EXACT / PARTIAL / MINIMAL / EMPTY
 
 使用例:
   module = PGRAModule()
@@ -23,7 +25,9 @@ Decoder 公理:
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from enum import Enum, auto
+from typing import Any, Dict, List, Optional, Protocol, Sequence
 import numpy as np
 
 from plp_capsule import (
@@ -33,115 +37,94 @@ from plp_capsule import (
     ObservationBlock,
     Capability,
 )
-from PGRA.state import PhysicalState, Particle, Geometry, GeometryKind
+from PGRA.state import PhysicalState, Particle
 from PGRA.engine import PGRAPhysicsEngine
-from PGRA.reference import DistanceReference, Reference
+from PGRA.reference import Reference
 from .base import CapsuleCodec, CapsuleModule
 
 
 # ==========================================================
-# PGRACodec
+# D8 Reconstruction Level
 # ==========================================================
 
-class PGRACodec:
+class ReconstructionLevel(Enum):
+    """復元の忠実度レベル (D8)"""
+    EXACT = auto()      # geometry.particles など明示的な粒子情報から完全復元
+    PARTIAL = auto()    # 一部の粒子のみ復元できた
+    MINIMAL = auto()    # 集約情報からの最小再構成
+    EMPTY = auto()      # 情報不足で空状態
+
+
+# ==========================================================
+# D7 DecodedState
+# ==========================================================
+
+@dataclass(frozen=True)
+class DecodedState:
     """
-    Capsule ⇔ PhysicalState の相互変換。
+    decode の戻り値。
+    状態そのものに加えて、復元の品質情報を持つ。
+    """
+    state: PhysicalState
+    confidence: float                 # 0.0 ~ 1.0
+    level: ReconstructionLevel
+    source_observations: tuple[str, ...] = ()  # 使った observation 名
 
-    - decode: Observation から PhysicalState を構築（公理準拠）
-    - encode: PhysicalState を観測して Capsule を生成
+    @property
+    def is_usable(self) -> bool:
+        """Module 側が簡易に判断するためのヘルパー"""
+        return self.confidence >= 0.5 and self.level != ReconstructionLevel.EMPTY
 
-    ロジック（緩和計算）は一切持たない。
+
+# ==========================================================
+# ObservationDecoder Protocol (plugin skeleton)
+# ==========================================================
+
+class ObservationDecoder(Protocol):
+    """
+    特定の Observation を PhysicalState の一部に変換するプラグイン。
+    将来 GeometryDecoder / EnergyDecoder / ConstraintDecoder を
+    独立に登録できるようにするための骨格。
     """
 
-    def __init__(self, source: str = "PGRA"):
-        self.source = source
-        self._builder = CapsuleBuilder()
+    name: str  # 担当する observation name（例: "geometry.particles"）
 
-        # 観測の登録順: 幾何 → 粒子詳細 → エネルギー
-        self._builder.register(_GeometryRadiusObserver(), priority=10)
-        self._builder.register(_ParticlePositionsObserver(), priority=15)
-        self._builder.register(_EnergyKineticObserver(), priority=20)
+    def can_decode(self, obs: ObservationBlock) -> bool:
+        ...
 
-    # ----------------------------------------------------------
-    # decode  (Axiom D1–D6)
-    # ----------------------------------------------------------
-    def decode(self, capsule: PLPCapsule) -> PhysicalState:
+    def decode(self, obs: ObservationBlock) -> tuple[List[Particle], float]:
         """
-        Capsule の Observation から PhysicalState を復元する。
-
-        優先順位 (D3 Geometric Priority):
-          1. 粒子位置の明示的観測 (geometry.particles)
-          2. 集約幾何 (n_particles + mean_radius) からの最小再構成
-          3. 情報が足りなければ空の PhysicalState を返す (D4)
-
-        捏造は行わない。欠落した速度はゼロ、質量は 1.0 をデフォルトとする。
+        Returns:
+            particles: 復元できた粒子リスト
+            confidence: この観測単体の信頼度 0.0~1.0
         """
-        state = PhysicalState()
+        ...
 
-        obs_map = {o.name: o for o in capsule.observations}
 
-        # --- 1. 粒子位置が明示されている場合 (最も忠実) ---
-        if "geometry.particles" in obs_map:
-            particles = self._decode_particle_positions(obs_map["geometry.particles"])
-            for p in particles:
-                state.particles[p.id] = p
-            return state
+# ==========================================================
+# Concrete Decoders
+# ==========================================================
 
-        # --- 2. 集約情報からの最小再構成 ---
-        n = 0
-        mean_radius = 0.0
+class GeometryParticlesDecoder:
+    """geometry.particles → 粒子リスト (EXACT向け)"""
 
-        if "geometry.radius" in obs_map:
-            vals = obs_map["geometry.radius"].values
-            n = int(vals.get("n_particles", 0))
-            mean_radius = float(vals.get("mean_radius", 0.0))
+    name = "geometry.particles"
 
-        if n <= 0:
-            # 情報不足 → 空状態を返す (D4 Incomplete Observation Tolerance)
-            return state
+    def can_decode(self, obs: ObservationBlock) -> bool:
+        return obs.name == self.name
 
-        # 円周上に等間隔配置する最小再構成（幾何のみ、意味なし）
-        for i in range(n):
-            theta = 2.0 * np.pi * i / n
-            pos = np.array([
-                mean_radius * np.cos(theta),
-                mean_radius * np.sin(theta),
-                0.0,
-            ], dtype=np.float64)
-            pid = f"p{i}"
-            state.particles[pid] = Particle(
-                id=pid,
-                position=pos,
-                velocity=np.zeros(3, dtype=np.float64),
-                mass=1.0,
-            )
-
-        return state
-
-    def _decode_particle_positions(self, obs: ObservationBlock) -> List[Particle]:
-        """
-        geometry.particles 観測から粒子リストを復元する。
-
-        期待する values の形式:
-          {
-            "n": 2.0,
-            "ids": "p0,p1",          # カンマ区切り文字列
-            "pos": "0,0,0,1.5,0,0",  # flat x0,y0,z0,x1,y1,z1...
-            "vel": "0,0,0,0,0,0",    # 同様（省略可）
-            "mass": "1.0,1.0",       # 省略可
-          }
-        """
+    def decode(self, obs: ObservationBlock) -> tuple[List[Particle], float]:
         vals = obs.values
         n = int(vals.get("n", 0))
         if n <= 0:
-            return []
+            return [], 0.0
 
         ids_str = str(vals.get("ids", ""))
         ids = [s.strip() for s in ids_str.split(",") if s.strip()] if ids_str else [f"p{i}" for i in range(n)]
 
-        pos_flat = self._parse_float_list(vals.get("pos", ""))
-        vel_flat = self._parse_float_list(vals.get("vel", ""))
-        mass_list = self._parse_float_list(vals.get("mass", ""))
+        pos_flat = _parse_float_list(vals.get("pos", ""))
+        vel_flat = _parse_float_list(vals.get("vel", ""))
+        mass_list = _parse_float_list(vals.get("mass", ""))
 
         particles: List[Particle] = []
         for i in range(n):
@@ -150,7 +133,7 @@ class PGRACodec:
             if len(pos_flat) >= (i + 1) * 3:
                 pos = np.array(pos_flat[i * 3:(i + 1) * 3], dtype=np.float64)
             else:
-                # 位置情報欠落 → この粒子は作らない (D4)
+                # 位置欠落 → この粒子は作らない (D4)
                 continue
 
             if len(vel_flat) >= (i + 1) * 3:
@@ -169,18 +152,163 @@ class PGRACodec:
                 mass=float(mass),
             ))
 
-        return particles
+        if not particles:
+            return [], 0.0
 
-    @staticmethod
-    def _parse_float_list(s: Any) -> List[float]:
-        if not s:
-            return []
-        if isinstance(s, (list, tuple)):
-            return [float(x) for x in s]
-        try:
-            return [float(x) for x in str(s).split(",") if x.strip()]
-        except ValueError:
-            return []
+        # 全粒子復元できていれば 1.0、一部なら比例
+        confidence = len(particles) / n
+        return particles, confidence
+
+
+class GeometryRadiusDecoder:
+    """
+    geometry.radius → 最小再構成 (MINIMAL向け)
+
+    配置戦略は実装依存である。
+    現在の実装は円周上の等間隔配置を用いるが、
+    これは公理ではなく実装戦略である。
+    将来、正方格子 / Fibonacci sphere / seeded random 等に
+    差し替えても公理を壊さない。
+    """
+
+    name = "geometry.radius"
+
+    def can_decode(self, obs: ObservationBlock) -> bool:
+        return obs.name == self.name
+
+    def decode(self, obs: ObservationBlock) -> tuple[List[Particle], float]:
+        vals = obs.values
+        n = int(vals.get("n_particles", 0))
+        mean_radius = float(vals.get("mean_radius", 0.0))
+
+        if n <= 0:
+            return [], 0.0
+
+        # -------------------------------------------------------
+        # Minimal deterministic reconstruction.
+        # The placement strategy is implementation-defined.
+        # Current strategy: equal spacing on a circle of radius mean_radius.
+        # -------------------------------------------------------
+        particles: List[Particle] = []
+        for i in range(n):
+            theta = 2.0 * np.pi * i / n
+            pos = np.array([
+                mean_radius * np.cos(theta),
+                mean_radius * np.sin(theta),
+                0.0,
+            ], dtype=np.float64)
+            particles.append(Particle(
+                id=f"p{i}",
+                position=pos,
+                velocity=np.zeros(3, dtype=np.float64),
+                mass=1.0,
+            ))
+
+        # 集約情報からの再構成なので信頼度は低め
+        confidence = 0.4
+        return particles, confidence
+
+
+def _parse_float_list(s: Any) -> List[float]:
+    if not s:
+        return []
+    if isinstance(s, (list, tuple)):
+        return [float(x) for x in s]
+    try:
+        return [float(x) for x in str(s).split(",") if x.strip()]
+    except ValueError:
+        return []
+
+
+# ==========================================================
+# PGRACodec
+# ==========================================================
+
+class PGRACodec:
+    """
+    Capsule ⇔ PhysicalState の相互変換。
+
+    - decode: Observation から DecodedState を構築（公理準拠）
+    - encode: PhysicalState を観測して Capsule を生成
+
+    ロジック（緩和計算）は一切持たない。
+    """
+
+    def __init__(self, source: str = "PGRA"):
+        self.source = source
+        self._builder = CapsuleBuilder()
+
+        # 観測の登録順: 幾何 → 粒子詳細 → エネルギー
+        self._builder.register(_GeometryRadiusObserver(), priority=10)
+        self._builder.register(_ParticlePositionsObserver(), priority=15)
+        self._builder.register(_EnergyKineticObserver(), priority=20)
+
+        # Decoder プラグイン（優先度順に試行）
+        self._decoders: List[ObservationDecoder] = [
+            GeometryParticlesDecoder(),  # EXACT
+            GeometryRadiusDecoder(),     # MINIMAL
+        ]
+
+    def register_decoder(self, decoder: ObservationDecoder) -> None:
+        """新しい ObservationDecoder を追加登録する"""
+        self._decoders.append(decoder)
+
+    # ----------------------------------------------------------
+    # decode  (Axiom D1–D8)
+    # ----------------------------------------------------------
+    def decode(self, capsule: PLPCapsule) -> DecodedState:
+        """
+        Capsule の Observation から DecodedState を復元する。
+
+        優先順位 (D3 Geometric Priority):
+          1. geometry.particles → EXACT / PARTIAL
+          2. geometry.radius    → MINIMAL
+          3. 情報不足           → EMPTY
+
+        捏造は行わない (D4)。
+        """
+        obs_map = {o.name: o for o in capsule.observations}
+        used: List[str] = []
+
+        # 登録された Decoder を優先順に試す
+        for decoder in self._decoders:
+            obs = obs_map.get(decoder.name)
+            if obs is None or not decoder.can_decode(obs):
+                continue
+
+            particles, conf = decoder.decode(obs)
+            if not particles:
+                continue
+
+            state = PhysicalState()
+            for p in particles:
+                state.particles[p.id] = p
+
+            used.append(decoder.name)
+
+            # レベル判定
+            if decoder.name == "geometry.particles":
+                if conf >= 0.999:
+                    level = ReconstructionLevel.EXACT
+                else:
+                    level = ReconstructionLevel.PARTIAL
+            else:
+                level = ReconstructionLevel.MINIMAL
+
+            return DecodedState(
+                state=state,
+                confidence=float(conf),
+                level=level,
+                source_observations=tuple(used),
+            )
+
+        # どの Decoder も成功しなかった
+        return DecodedState(
+            state=PhysicalState(),
+            confidence=0.0,
+            level=ReconstructionLevel.EMPTY,
+            source_observations=(),
+        )
 
     # ----------------------------------------------------------
     # encode
@@ -335,23 +463,25 @@ class PGRAModule:
         codec: Optional[PGRACodec] = None,
         epsilon: float = 1e-4,
         max_iterations: int = 10,
+        min_confidence: float = 0.5,
     ):
         self.engine = engine or PGRAPhysicsEngine()
         self.codec = codec or PGRACodec()
         self.epsilon = epsilon
         self.max_iterations = max_iterations
+        self.min_confidence = min_confidence
 
     def process(self, capsule: PLPCapsule) -> PLPCapsule:
         """
         Input Capsule → decode → relax → encode → Output Capsule
         """
-        # 1. Decode (Axiom-driven)
-        state = self.codec.decode(capsule)
+        # 1. Decode (Axiom-driven) → DecodedState
+        decoded = self.codec.decode(capsule)
 
-        # decode で粒子が得られなかった場合は、既存 engine.state を維持
-        # （実験時の後方互換）
-        if state.particles:
-            self.engine.state = state
+        # confidence が十分で粒子がある場合のみ engine に載せる
+        if decoded.is_usable:
+            self.engine.state = decoded.state
+        # そうでなければ既存の engine.state を維持（後方互換）
 
         # 2. Logic（純粋な幾何緩和。Capsule を知らない）
         self.engine.geometric_relaxation(
