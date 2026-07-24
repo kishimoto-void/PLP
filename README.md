@@ -21,6 +21,29 @@ PLPは**「意味を持たない物理世界」**を提供します。
 
 ---
 
+Architecture (Capsule-centric)
+
+```
+Capsule
+   │
+   ▼
+Codec.decode()  →  DecodedState
+   │
+   ▼
+Module Logic（純粋。Capsule を知らない）
+   │
+   ▼
+Codec.encode()  →  Capsule
+```
+
+- **Capsule** = 意味を持たない物理状態の輸送規格（Universal Bus）
+- **Codec**  = Capsule ⇔ 内部状態の変換のみ（ロジックを持たない）
+- **Module** = 内部状態に対する処理（`process(capsule) -> capsule`）
+
+詳細は `CODEC_SPEC.md` / `SPEC.md` / `CAPSULE.md` を参照。
+
+---
+
 Design Philosophy
 
 従来のLLMでは、
@@ -43,12 +66,7 @@ Input
  ↓
 Particle World
  ↓
-Geometry
-Constraint
-Vector
-Phase
-Energy
-Topology
+Geometry / Constraint / Vector / Phase / Energy / Topology
  ↓
 Observer
  ↓
@@ -70,163 +88,38 @@ Meaning
 
 Core Principles
 
-PLPは以下の原則を持ちます。
-
-1. Semantic Free
-
-PLPは意味を知りません。
-
-例えば
-
-「猫」
-「嬉しい」
-「戦争」
-
-は全て単なる入力刺激です。
-
-PLPは意味ではなく物理状態のみを扱います。
+1. Semantic Free — PLPは意味を知りません
+2. Observer First — 観測のみ。推論・分類をしない
+3. Language Independent — 実装言語に依存しない
+4. LLM Independent — 同じCapsuleをどのLLMにも送れる
 
 ---
 
-2. Observer First
+Repository Layout
 
-Observerは
-
-Geometry
-Energy
-Constraint
-Clock
-Topology
-Phase
-Vector
-
-のみを観測します。
-
-意味を生成しません。
-
----
-
-3. Language Independent
-
-PLPは
-
-- Python
-- Rust
-- C++
-- C
-- Java
-- Go
-
-などの実装言語に依存しません。
-
-Observer Capsule が共通仕様であれば実装は自由です。
+```
+PLP/
+├── plp_capsule.py          # Capsule v1.3
+├── plp_kernel.py           # 旧数値忠実 Kernel
+├── CODEC_SPEC.md           # Codec 正式仕様
+├── SPEC.md / CAPSULE.md
+├── core/                   # 世界の定義（Particle0 / Geometry / Constraint / Clock）
+├── PGRA/                   # 幾何緩和エンジン
+├── codecs/                 # Capsule ⇔ 内部状態（PGRACodec リファレンス）
+├── modules/                # 監視モジュール
+└── EXPERIMENT_*.md
+```
 
 ---
 
-4. LLM Independent
+Quick import (from repo root)
 
-PLPは
-
-- ChatGPT
-- Claude
-- Gemini
-- Grok
-- Local LLM
-
-など全てへ同じCapsuleを送ることができます。
-
-解釈のみ各LLMが担当します。
-
----
-
-Runtime Architecture
-
-            Input
-              │
-              ▼
-      Input Encoder
-              │
-              ▼
-     Particle Kernel
-              │
-              ▼
-        World Update
-              │
-              ▼
-         Observer
-              │
-              ▼
-       PLP Capsule
-              │
-      ┌───────┼────────┐
-      ▼       ▼        ▼
-  ChatGPT   Claude   Gemini
-      ▼       ▼        ▼
-        Meaning / Reasoning
-
----
-
-Observer Capsule
-
-Observerは物理状態のみを送信します。
-
-例
-
-Protocol : PLP/1.0
-
-Clock : 2048
-
-Geometry
- MeanRadius
- StdRadius
-
-Constraint
- Energy
-
-Phase
-
-Vector
-
-Topology
-
-ΔGeometry
-
-ΔEnergy
-
-ΔPhase
-
-ここには
-
-- 感情
-- 意味
-- 推論
-
-は存在しません。
-
----
-
-Runtime Skeleton
-
-Input
- ↓
-Particle Kernel
- ↓
-Observer
- ↓
-Capsule
- ↓
-Transport
- ↓
-LLM
-
-各モジュールは責務を分離します。
-
-- Input：入力取得
-- Kernel：粒子力学
-- Observer：物理観測
-- Capsule：通信フォーマット
-- Transport：送信
-- LLM：意味解釈
+```python
+from plp_capsule import PLPCapsule, CapsuleSerializer, verify_content_hash
+from codecs import PGRACodec, PGRAModule, DecodedState, ReconstructionLevel
+from PGRA import PGRAPhysicsEngine, PhysicalState, DistanceReference
+from core import Particle0, Geometry, Constraint, Clock
+```
 
 ---
 
@@ -256,27 +149,6 @@ PLPはAIそのものではなく、
 
 ---
 
-Future Roadmap
-
-今後予定している主なモジュール
-
-- Geometry Observer
-- Energy Observer
-- Constraint Observer
-- Phase Observer
-- Topology Observer
-- Synchronization Observer
-- Residue / Memory Module
-- Dashboard / Visualization
-- Unity Bridge
-- WebSocket Transport
-- Binary Capsule Format
-- Rust Runtime
-- C/C++ Runtime
-- GPU Runtime
-
----
-
 License
 
 Particle Language Program (PLP)
@@ -286,3 +158,5 @@ A language-independent and LLM-independent particle dynamics runtime for transmi
 The meaning is never generated inside PLP.
 
 Meaning begins only when the receiving intelligence interprets the capsule.
+
+実験は忠実に実際行って。
